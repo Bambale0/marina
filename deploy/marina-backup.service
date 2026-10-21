@@ -1,0 +1,15 @@
+[Unit]
+Description=Marina private SQLite backup
+
+[Service]
+Type=oneshot
+User=marina
+Group=marina
+WorkingDirectory=/opt/marina/current
+EnvironmentFile=/etc/marina.env
+ExecStart=/bin/sh -c 'exec .venv/bin/python -m marina.cli backup --path "/var/lib/marina/backups/backup-$(date -u +%%Y%%m%%dT%%H%%M%%SZ).sqlite"'
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/marina
