@@ -87,6 +87,20 @@ class Bot:
 
     def keyboard(self, buttons):
         rows = []
+        numbered = []
+
+        def flush_numbered():
+            if not numbered:
+                return
+            row_count = (len(numbered) + 2) // 3
+            width, extra = divmod(len(numbered), row_count)
+            offset = 0
+            for i in range(row_count):
+                size = width + (i < extra)
+                rows.append(numbered[offset : offset + size])
+                offset += size
+            numbered.clear()
+
         with transaction(self.app.config["DATABASE"]) as db:
             for title, action, data in buttons:
                 obj = insert(
@@ -97,7 +111,13 @@ class Bot:
                     self.owner,
                     status="active",
                 )
-                rows.append([{"text": title, "callback_data": "b:" + obj["id"]}])
+                button = {"text": title, "callback_data": "b:" + obj["id"]}
+                if action == "choose_concern":
+                    numbered.append(button)
+                else:
+                    flush_numbered()
+                    rows.append([button])
+        flush_numbered()
         return {"inline_keyboard": rows}
 
     def send(self, text, buttons=None):
@@ -257,6 +277,7 @@ class Bot:
             group = d.get("age_group")
             with connect(self.app.config["DATABASE"]) as db:
                 items = screen(db, group)
+            self.state_set(step=None)
             text = "\n".join(f"{i}. {item['text']}" for i, item in enumerate(items, 1))
             self.send(
                 f"{AGE_GROUPS[group][0]}\n\nС какой проблемой Вы обращаетесь?\n\n{text}\n\n"
@@ -265,7 +286,21 @@ class Bot:
                     (str(i), "choose_concern", {"age_group": group, "concern": item})
                     for i, item in enumerate(items, 1)
                 ]
-                + [("Изменить возраст", "start_test", {})],
+                + [
+                    ("добавить свое", "custom_concern", {"age_group": group}),
+                    ("Изменить возраст", "start_test", {}),
+                ],
+            )
+        elif action == "custom_concern":
+            group = d.get("age_group")
+            require(group in AGE_GROUPS, "Выберите возрастную группу")
+            if not self.privacy_gate("custom_concern", {"age_group": group}):
+                return
+            self.state_set(step="onboarding_custom", onboarding=True, age_group=group, concern=None)
+            self.send(
+                "С какой проблемой Вы обращаетесь?\n\n"
+                "Напишите своими словами одним сообщением. До 1000 символов.",
+                [("Вернуться к вариантам", "age_group", {"age_group": group})],
             )
         elif action == "choose_concern":
             require(
@@ -298,8 +333,8 @@ class Bot:
             self.profile_menu()
         elif action == "consent":
             self.api("/consents", "POST", {"policy_id": d["id"], "accepted": True})
-            if d.get("next_action") == "choose_concern":
-                self.action("choose_concern", d["choice"])
+            if d.get("next_action") in ("choose_concern", "custom_concern"):
+                self.action(d["next_action"], d["choice"])
             else:
                 self.profile_menu()
         elif action == "select":
@@ -848,7 +883,19 @@ class Bot:
             return self.send(
                 "Файл сохранён. Теперь отправьте текст проблемы и контекст одним сообщением для передачи полного комплекта."
             )
-        if step == "profile_name":
+        if step == "onboarding_custom":
+            require(
+                1 <= len(text) <= 1000 and not text.startswith("/"),
+                "Опишите проблему текстом: от 1 до 1000 символов.",
+            )
+            self.action(
+                "choose_concern",
+                {
+                    "age_group": self.state["data"]["age_group"],
+                    "concern": {"id": "custom", "text": text},
+                },
+            )
+        elif step == "profile_name":
             require(1 <= len(text) <= 100, "Введите имя до 100 символов")
             self.state_set(step="profile_birth", profile_name=text)
             self.send("Дата рождения в формате ГГГГ-ММ-ДД, например 2020-05-17.")

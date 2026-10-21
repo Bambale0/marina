@@ -69,7 +69,7 @@ def test_age_screen_uses_published_admin_copy_and_keeps_old_buttons(app):
         ).json
     open_screen()
     assert "1. Новая формулировка?" in sent[-1]["text"]
-    assert len(sent[-1]["reply_markup"]["inline_keyboard"]) == 2
+    assert len(sent[-1]["reply_markup"]["inline_keyboard"]) == 3
     click("Изменить возраст")
     click("9–10 лет")
     assert "6. Сильно переживает из-за учёбы и ошибок?" in sent[-1]["text"]
