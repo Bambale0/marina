@@ -1,5 +1,5 @@
 from marina.bot import handle_update
-from marina.onboarding import QUESTIONS
+from marina.onboarding import AGE_GROUPS, QUESTIONS, default_concerns
 from tests.test_identity import app, login
 from tests.test_screening import publish
 
@@ -50,12 +50,35 @@ def test_age_screen_uses_published_admin_copy_and_keeps_old_buttons(app):
         click("пройти тесты")
         click("3–4 года")
 
+    # Every numbered callback must open its own age-specific explanation.
+    for group, (label, _, _) in AGE_GROUPS.items():
+        message("/start")
+        click("пройти тесты")
+        click(label)
+        for i, concern in enumerate(default_concerns(group), 1):
+            click(str(i))
+            assert sent[-1]["text"] == concern["text"] + "\n\n" + concern["description"]
+            assert [row[0]["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"]] == [
+                "Продолжить",
+                "Вернуться к вариантам",
+            ]
+            click("Вернуться к вариантам")
+
     draft = admin.post(
         "/api/admin/content",
         json={
             "kind": "onboarding",
             "title": "Edited screen",
-            "data": {**defaults, "concerns": [{"id": "speech", "text": "Новая формулировка?"}]},
+            "data": {
+                **defaults,
+                "concerns": [
+                    {
+                        "id": "speech",
+                        "text": "Новая формулировка?",
+                        "description": "Новое пояснение специалиста.",
+                    }
+                ],
+            },
             "reason": "Owner editing introduction",
         },
     ).json
@@ -70,6 +93,9 @@ def test_age_screen_uses_published_admin_copy_and_keeps_old_buttons(app):
     open_screen()
     assert "1. Новая формулировка?" in sent[-1]["text"]
     assert len(sent[-1]["reply_markup"]["inline_keyboard"]) == 3
+    click("1")
+    assert sent[-1]["text"] == "Новая формулировка?\n\nНовое пояснение специалиста."
+    click("Вернуться к вариантам")
     click("Изменить возраст")
     click("9–10 лет")
     assert "6. Сильно переживает из-за учёбы и ошибок?" in sent[-1]["text"]
@@ -88,6 +114,8 @@ def test_screen_validation_rejects_duplicate_ids_and_empty_text(app):
     for concerns in (
         [{"id": "x", "text": ""}],
         [{"id": "x", "text": "A"}, {"id": "x", "text": "B"}],
+        [{"id": "x", "text": "A", "description": 42}],
+        [{"id": "x", "text": "A", "description": "x" * 2001}],
     ):
         obj = admin.post(
             "/api/admin/content",

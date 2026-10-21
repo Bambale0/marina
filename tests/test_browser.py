@@ -65,12 +65,20 @@ def test_browser_admin_and_profile_forms(app):
             texts = page.get_by_label("Текст", exact=True)
             assert texts.count() == 7
             texts.first.fill("Отредактированный вопрос?")
+            descriptions = page.get_by_label("Пояснение после выбора вопроса", exact=True)
+            assert descriptions.count() == 7
+            assert "режим, задания" in descriptions.first.input_value()
+            descriptions.first.fill("Изменённое пояснение специалиста.")
             page.get_by_label("Основание / причина действия", exact=True).fill("Edit introduction")
             page.get_by_role("button", name="Сохранить черновик", exact=True).click()
             page.get_by_text("Черновик сохранён", exact=True).wait_for()
             assert (
                 page.get_by_label("Текст", exact=True).first.input_value()
                 == "Отредактированный вопрос?"
+            )
+            assert (
+                page.get_by_label("Пояснение после выбора вопроса", exact=True).first.input_value()
+                == "Изменённое пояснение специалиста."
             )
             page.get_by_role("button", name="Все объекты", exact=True).click()
             page.get_by_role("heading", name="Все объекты", exact=True).wait_for()
