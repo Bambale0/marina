@@ -11,6 +11,7 @@ from . import Problem, age_months, object_get, require
 from .db import audit, connect, insert, transaction, uid, unpack, update
 from .providers import telegram
 from .onboarding import AGE_GROUPS, screen
+from .intro_activities import ACTIVITY_INTRO, OBSERVATION_PROMPT
 
 MENU = [
     ("Профили", "profiles", {}),
@@ -156,7 +157,14 @@ class Bot:
         self.send(
             (
                 (
-                    "Ваш выбор: " + self.state["data"]["concern"]["text"] + "\n\n"
+                    (
+                        "Спасибо! Ваше наблюдение сохранено.\n\n"
+                        if self.state["data"]["concern"].get("observation")
+                        else ""
+                    )
+                    + "Ваш выбор: "
+                    + self.state["data"]["concern"]["text"]
+                    + "\n\n"
                     if self.state["data"].get("concern")
                     else ""
                 )
@@ -308,17 +316,91 @@ class Bot:
                 "Откройте знакомство заново: /start",
             )
             choice = {"age_group": d["age_group"], "concern": d["concern"]}
+            self.state_set(step=None)
+            next_action = "activity_menu" if d["concern"].get("activities") else "continue_concern"
             description = d["concern"].get("description", "")
             if description:
                 self.send(
                     d["concern"]["text"] + "\n\n" + description,
                     [
-                        ("Продолжить", "continue_concern", choice),
+                        ("Продолжить", next_action, choice),
                         ("Вернуться к вариантам", "age_group", {"age_group": d["age_group"]}),
                     ],
                 )
             else:
-                self.action("continue_concern", choice)
+                self.action(next_action, choice)
+        elif action == "activity_menu":
+            require(
+                d.get("age_group") in AGE_GROUPS and isinstance(d.get("concern"), dict),
+                "Откройте знакомство заново: /start",
+            )
+            concern = d["concern"]
+            choice = {"age_group": d["age_group"], "concern": concern}
+            activities = concern.get("activities", [])
+            require(len(activities) == 2, "Варианты задания ещё готовятся")
+            self.state_set(step=None)
+            self.send(
+                concern["text"] + "\n\n" + ACTIVITY_INTRO + "\n\n"
+                "Выберите одно задание из двух. Все задания подряд проводить не нужно.\n\n"
+                + "\n".join(f"Вариант {i}: {a['title']}" for i, a in enumerate(activities, 1)),
+                [
+                    (f"Вариант {i}", "choose_activity", {**choice, "activity_id": a["id"]})
+                    for i, a in enumerate(activities, 1)
+                ]
+                + [("Вернуться к пояснению", "choose_concern", choice)],
+            )
+        elif action == "choose_activity":
+            require(
+                d.get("age_group") in AGE_GROUPS and isinstance(d.get("concern"), dict),
+                "Откройте знакомство заново: /start",
+            )
+            concern = d["concern"]
+            activity = next(
+                (a for a in concern.get("activities", []) if a["id"] == d.get("activity_id")), None
+            )
+            require(activity, "Выберите один из предложенных вариантов")
+            self.state_set(step=None)
+            selected = {
+                "age_group": d["age_group"],
+                "concern": {**concern, "selected_activity": activity},
+            }
+            self.send(
+                activity["title"]
+                + "\n\n"
+                + activity["instructions"]
+                + "\n\nЧто заметить\n"
+                + concern["observation_focus"]
+                + ("\n\n" + concern["activity_note"] if concern.get("activity_note") else ""),
+                [
+                    ("Записать наблюдение", "observe_activity", selected),
+                    (
+                        "Выбрать другой вариант",
+                        "activity_menu",
+                        {"age_group": d["age_group"], "concern": concern},
+                    ),
+                ],
+            )
+        elif action == "observe_activity":
+            require(
+                d.get("age_group") in AGE_GROUPS
+                and isinstance(d.get("concern"), dict)
+                and d["concern"].get("selected_activity"),
+                "Сначала выберите задание",
+            )
+            choice = {"age_group": d["age_group"], "concern": d["concern"]}
+            if not self.privacy_gate("observe_activity", choice):
+                return
+            self.state_set(step="activity_observation", onboarding=True, **choice)
+            self.send(
+                OBSERVATION_PROMPT,
+                [
+                    (
+                        "Вернуться к заданию",
+                        "choose_activity",
+                        {**choice, "activity_id": d["concern"]["selected_activity"]["id"]},
+                    )
+                ],
+            )
         elif action == "continue_concern":
             require(
                 d.get("age_group") in AGE_GROUPS and isinstance(d.get("concern"), dict),
@@ -332,10 +414,12 @@ class Bot:
                 audit(
                     db,
                     self.owner,
-                    "bot.introduction",
+                    "bot.observation" if d["concern"].get("observation") else "bot.introduction",
                     self.state,
                     self.now,
-                    "Пользователь выбрал проблему при знакомстве",
+                    "Пользователь сохранил наблюдение после выбранного задания"
+                    if d["concern"].get("observation")
+                    else "Пользователь выбрал проблему при знакомстве",
                 )
             self.profile_menu()
         elif action == "menu":
@@ -350,7 +434,12 @@ class Bot:
             self.profile_menu()
         elif action == "consent":
             self.api("/consents", "POST", {"policy_id": d["id"], "accepted": True})
-            if d.get("next_action") in ("choose_concern", "continue_concern", "custom_concern"):
+            if d.get("next_action") in (
+                "choose_concern",
+                "continue_concern",
+                "custom_concern",
+                "observe_activity",
+            ):
                 self.action(d["next_action"], d["choice"])
             else:
                 self.profile_menu()
@@ -900,7 +989,19 @@ class Bot:
             return self.send(
                 "Файл сохранён. Теперь отправьте текст проблемы и контекст одним сообщением для передачи полного комплекта."
             )
-        if step == "onboarding_custom":
+        if step == "activity_observation":
+            require(
+                1 <= len(text) <= 3000 and not text.startswith("/"),
+                "Запишите наблюдение текстом: от 1 до 3000 символов.",
+            )
+            self.action(
+                "continue_concern",
+                {
+                    "age_group": self.state["data"]["age_group"],
+                    "concern": {**self.state["data"]["concern"], "observation": text},
+                },
+            )
+        elif step == "onboarding_custom":
             require(
                 1 <= len(text) <= 1000 and not text.startswith("/"),
                 "Опишите проблему текстом: от 1 до 1000 символов.",

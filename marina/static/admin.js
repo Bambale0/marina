@@ -3,6 +3,12 @@ const labels = {
   age_group: "Возрастная группа (3-4 / 5-6 / 7-8 / 9-10)",
   concerns: "Вопросы экрана знакомства",
   description: "Пояснение после выбора вопроса",
+  activities: "Варианты задания",
+  observation_focus: "Что заметить",
+  activity_note: "Примечание к заданию",
+  activity_source: "Источник и контекст задания",
+  selected_activity: "Выбранное задание",
+  observation: "Наблюдение родителя",
   title: "Название",
   owner: "Ответственный",
   status: "Готовность",
@@ -201,7 +207,9 @@ const policyTemplates = {
   ai: { type: "ai", terms: "", model: "", max_output_tokens: 0, daily_jobs: 0 },
 };
 const itemTemplates = {
-  concerns: { id: "", text: "", description: "" },
+  concerns: { id: "", text: "", description: "", activities: [],
+    observation_focus: "", activity_note: "", activity_source: "" },
+  activities: { id: "", title: "", instructions: "" },
   case_questions: { id: "", text: "", required: true },
   questions: {
     id: "",
@@ -224,7 +232,9 @@ function structuredEditor(data, context = "") {
     const value =
       name === "when" && !rawValue ? { question: "", answer: "" } : rawValue;
     if (["approval", "previous_version"].includes(name)) continue;
-    const title = labels[name] || name;
+    const title = context === "activities" && name === "title" ? "Название задания"
+      : context === "activities" && name === "instructions" ? "Инструкция задания"
+      : labels[name] || name;
     if (
       name === "answers" &&
       typeof value === "object" &&
@@ -312,6 +322,8 @@ function structuredEditor(data, context = "") {
             : [
                   "text",
                   "description",
+                  "observation_focus",
+                  "activity_note",
                   "instructions",
                   "limitations",
                   "terms",

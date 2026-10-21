@@ -103,8 +103,15 @@ DESCRIPTIONS = {
 
 
 def default_concerns(age_group):
+    from .intro_activities import ACTIVITIES
+
     return [
-        {"id": str(i), "text": text, "description": DESCRIPTIONS[age_group][i - 1]}
+        {
+            "id": str(i),
+            "text": text,
+            "description": DESCRIPTIONS[age_group][i - 1],
+            **ACTIVITIES[age_group][i - 1],
+        }
         for i, text in enumerate(QUESTIONS[age_group], 1)
     ]
 
@@ -145,4 +152,54 @@ def validate_screen(data):
             isinstance(description, str) and len(description) <= 2000,
             "Описание должно быть текстом до 2000 символов",
         )
+        activities = item.get("activities", [])
+        require(
+            isinstance(activities, list) and len(activities) in (0, 2),
+            "Добавьте ровно два варианта задания или оставьте список пустым",
+        )
+        activity_ids = set()
+        for activity in activities:
+            require(isinstance(activity, dict), "Неверный вариант задания")
+            activity_id = activity.get("id")
+            require(
+                isinstance(activity_id, str)
+                and 1 <= len(activity_id) <= 40
+                and activity_id not in activity_ids,
+                "Нужны уникальные ID заданий",
+            )
+            activity_ids.add(activity_id)
+            for field, limit in (("title", 120), ("instructions", 1500)):
+                value = activity.get(field)
+                require(
+                    isinstance(value, str) and 1 <= len(value.strip()) <= limit,
+                    "Укажите название и инструкцию задания в допустимых пределах",
+                )
+        for field, limit in (
+            ("observation_focus", 1000),
+            ("activity_note", 2000),
+            ("activity_source", 1000),
+        ):
+            value = item.get(field, "")
+            require(
+                isinstance(value, str) and len(value) <= limit,
+                "Проверьте текст наблюдения, примечания и источника",
+            )
+        require(
+            not activities or item.get("observation_focus", "").strip(),
+            "Укажите, что заметить при выполнении задания",
+        )
+        for activity in activities:
+            require(
+                sum(
+                    len(value)
+                    for value in (
+                        activity["title"],
+                        activity["instructions"],
+                        item.get("observation_focus", ""),
+                        item.get("activity_note", ""),
+                    )
+                )
+                <= 3800,
+                "Сократите текст задания: инструкция с примечаниями не помещается в сообщение",
+            )
         seen.add(id)
