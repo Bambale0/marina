@@ -69,6 +69,13 @@ def test_browser_admin_and_profile_forms(app):
             assert descriptions.count() == 7
             assert "режим, задания" in descriptions.first.input_value()
             descriptions.first.fill("Изменённое пояснение специалиста.")
+            tasks = page.get_by_label("Инструкция задания", exact=True)
+            assert tasks.count() == 14
+            assert "Нарисуйте цепочку" in tasks.first.input_value()
+            tasks.first.fill("Инструкция, отредактированная специалистом.")
+            page.get_by_label("Что заметить", exact=True).first.fill(
+                "Наблюдайте за помощью взрослого."
+            )
             page.get_by_label("Основание / причина действия", exact=True).fill("Edit introduction")
             page.get_by_role("button", name="Сохранить черновик", exact=True).click()
             page.get_by_text("Черновик сохранён", exact=True).wait_for()
@@ -79,6 +86,14 @@ def test_browser_admin_and_profile_forms(app):
             assert (
                 page.get_by_label("Пояснение после выбора вопроса", exact=True).first.input_value()
                 == "Изменённое пояснение специалиста."
+            )
+            assert (
+                page.get_by_label("Инструкция задания", exact=True).first.input_value()
+                == "Инструкция, отредактированная специалистом."
+            )
+            assert (
+                page.get_by_label("Что заметить", exact=True).first.input_value()
+                == "Наблюдайте за помощью взрослого."
             )
             page.get_by_role("button", name="Все объекты", exact=True).click()
             page.get_by_role("heading", name="Все объекты", exact=True).wait_for()

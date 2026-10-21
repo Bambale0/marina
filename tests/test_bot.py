@@ -148,6 +148,10 @@ def test_welcome_funnel_to_test(app, test_available, group, count):
     assert f"{count}. " in sent[-1]["text"]
     click("1")
     click("Продолжить")
+    assert "Выберите одно задание" in sent[-1]["text"]
+    click("Вариант 1")
+    assert "Что заметить" in sent[-1]["text"]
+    click("Записать наблюдение")
     assert "готовит" in sent[-1]["text"]
     admin = login(app)
     publish(
@@ -169,12 +173,25 @@ def test_welcome_funnel_to_test(app, test_available, group, count):
     click(group)
     click("1")
     click("Продолжить")
+    click("Вариант 1")
+    click("Записать наблюдение")
     assert sent[-1]["text"] == "Test consent"
     owner_id = login(app, 2).get("/api/me").json["account"]["id"]
     assert admin.get("/api/admin/accounts/" + owner_id).json["introduction"] is None
     click("Прочитал(а) и принимаю")
+    assert "Что получилось самостоятельно" in sent[-1]["text"]
+    assert "В какой момент понадобилась помощь" in sent[-1]["text"]
+    send(" ")
+    assert "от 1 до 3000" in sent[-1]["text"]
+    send("x" * 3001)
+    assert "от 1 до 3000" in sent[-1]["text"]
+    observation = "Начал сам. Понадобилось повторение. После повторения закончил."
+    send(observation)
+    assert "наблюдение сохранено" in sent[-1]["text"]
     introduction = admin.get("/api/admin/accounts/" + owner_id).json["introduction"]
     assert introduction["concern"]["id"] == "1"
+    assert introduction["concern"]["selected_activity"]["id"] == "1"
+    assert introduction["concern"]["observation"] == observation
     assert (
         introduction["age_group"]
         == {"3–4 года": "3-4", "5–6 лет": "5-6", "7–8 лет": "7-8", "9–10 лет": "9-10"}[group]
@@ -202,6 +219,9 @@ def test_welcome_funnel_to_test(app, test_available, group, count):
     click(group)
     click("1")
     click("Продолжить")
+    click("Вариант 2")
+    click("Записать наблюдение")
+    send("Задание получилось с подсказкой.")
     click("Child")
     assert "тест" in sent[-1]["text"]
     send("/menu")

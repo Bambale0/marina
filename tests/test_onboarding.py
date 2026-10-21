@@ -14,7 +14,7 @@ def test_age_screen_uses_published_admin_copy_and_keeps_old_buttons(app):
         "ok": True,
         "result": {},
     }
-    counter = iter(range(1, 100))
+    counter = iter(range(1, 1000))
 
     def message(text):
         handle_update(
@@ -62,6 +62,17 @@ def test_age_screen_uses_published_admin_copy_and_keeps_old_buttons(app):
                 "Продолжить",
                 "Вернуться к вариантам",
             ]
+            click("Продолжить")
+            assert "Выберите одно задание" in sent[-1]["text"]
+            assert "Все задания подряд проводить не нужно" in sent[-1]["text"]
+            for number, activity in enumerate(concern["activities"], 1):
+                click(f"Вариант {number}")
+                assert activity["instructions"] in sent[-1]["text"]
+                assert concern["observation_focus"] in sent[-1]["text"]
+                other = concern["activities"][2 - number]
+                assert other["instructions"] not in sent[-1]["text"]
+                click("Выбрать другой вариант")
+            click("Вернуться к пояснению")
             click("Вернуться к вариантам")
 
     draft = admin.post(
@@ -111,11 +122,15 @@ def test_age_screen_uses_published_admin_copy_and_keeps_old_buttons(app):
 
 def test_screen_validation_rejects_duplicate_ids_and_empty_text(app):
     admin = login(app)
+    complete = default_concerns("3-4")[0]
     for concerns in (
         [{"id": "x", "text": ""}],
         [{"id": "x", "text": "A"}, {"id": "x", "text": "B"}],
         [{"id": "x", "text": "A", "description": 42}],
         [{"id": "x", "text": "A", "description": "x" * 2001}],
+        [{**complete, "activities": complete["activities"][:1]}],
+        [{**complete, "activities": [complete["activities"][0], complete["activities"][0]]}],
+        [{**complete, "observation_focus": ""}],
     ):
         obj = admin.post(
             "/api/admin/content",
