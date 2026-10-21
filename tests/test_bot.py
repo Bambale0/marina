@@ -136,9 +136,15 @@ def test_welcome_funnel_to_test(app, test_available, group, count):
     assert len(sent[-1]["reply_markup"]["inline_keyboard"]) == 4
     click(group)
     assert "С какой проблемой Вы обращаетесь?" in sent[-1]["text"]
-    assert [row[0]["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"]][:-1] == [
-        str(i) for i in range(1, count + 1)
-    ]
+    rows = sent[-1]["reply_markup"]["inline_keyboard"]
+    assert [len(row) for row in rows] == {
+        5: [3, 2, 1, 1],
+        6: [3, 3, 1, 1],
+        7: [3, 2, 2, 1, 1],
+    }[count]
+    assert [b["text"] for row in rows[:-2] for b in row] == [str(i) for i in range(1, count + 1)]
+    assert rows[-2][0]["text"] == "добавить свое"
+    assert rows[-1][0]["text"] == "Изменить возраст"
     assert f"{count}. " in sent[-1]["text"]
     click("1")
     assert "готовит" in sent[-1]["text"]
@@ -200,3 +206,16 @@ def test_welcome_funnel_to_test(app, test_available, group, count):
     send("/profiles")
     click("Child")
     assert sent[-1]["text"] == "Профиль выбран."
+    send("/start")
+    click("пройти тесты")
+    click(group)
+    click("добавить свое")
+    assert "Напишите своими словами" in sent[-1]["text"]
+    send(" ")
+    assert "от 1 до 1000" in sent[-1]["text"]
+    send("x" * 1001)
+    assert "от 1 до 1000" in sent[-1]["text"]
+    send("Мой собственный вариант проблемы")
+    assert "Мой собственный вариант проблемы" in sent[-1]["text"]
+    introduction = admin.get("/api/admin/accounts/" + owner_id).json["introduction"]
+    assert introduction["concern"] == {"id": "custom", "text": "Мой собственный вариант проблемы"}
