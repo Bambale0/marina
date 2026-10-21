@@ -3,6 +3,7 @@ from . import body, object_get, offset, protected, reason, require
 from .db import audit, insert, unpack, update
 
 KINDS = {
+    "onboarding",
     "decision",
     "material",
     "method",
@@ -16,6 +17,20 @@ KINDS = {
 
 
 def register_content(app):
+    @app.get("/api/admin/onboarding-defaults/<age_group>")
+    @protected(admin=True)
+    def onboarding_defaults(age_group):
+        from .onboarding import AGE_GROUPS, QUESTIONS
+
+        require(age_group in AGE_GROUPS, "Выберите возрастную группу")
+        return {
+            "title": "Знакомство: " + AGE_GROUPS[age_group][0],
+            "age_group": age_group,
+            "concerns": [
+                {"id": str(i), "text": text} for i, text in enumerate(QUESTIONS[age_group], 1)
+            ],
+        }
+
     @app.get("/api/admin/content")
     @protected(admin=True)
     def list_content():
@@ -260,6 +275,10 @@ def register_content(app):
 
 def validate(obj):
     d = obj["data"]
+    if obj["kind"] == "onboarding":
+        from .onboarding import validate_screen
+
+        validate_screen(d)
     if obj["kind"] in ("decision", "material"):
         require(
             d.get("owner") and d.get("status"),
