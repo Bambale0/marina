@@ -147,6 +147,7 @@ def test_welcome_funnel_to_test(app, test_available, group, count):
     assert rows[-1][0]["text"] == "Изменить возраст"
     assert f"{count}. " in sent[-1]["text"]
     click("1")
+    click("Продолжить")
     assert "готовит" in sent[-1]["text"]
     admin = login(app)
     publish(
@@ -167,6 +168,7 @@ def test_welcome_funnel_to_test(app, test_available, group, count):
     click("пройти тесты")
     click(group)
     click("1")
+    click("Продолжить")
     assert sent[-1]["text"] == "Test consent"
     owner_id = login(app, 2).get("/api/me").json["account"]["id"]
     assert admin.get("/api/admin/accounts/" + owner_id).json["introduction"] is None
@@ -199,6 +201,7 @@ def test_welcome_funnel_to_test(app, test_available, group, count):
     click("пройти тесты")
     click(group)
     click("1")
+    click("Продолжить")
     click("Child")
     assert "тест" in sent[-1]["text"]
     send("/menu")

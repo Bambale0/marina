@@ -308,7 +308,24 @@ class Bot:
                 "Откройте знакомство заново: /start",
             )
             choice = {"age_group": d["age_group"], "concern": d["concern"]}
-            if not self.privacy_gate("choose_concern", choice):
+            description = d["concern"].get("description", "")
+            if description:
+                self.send(
+                    d["concern"]["text"] + "\n\n" + description,
+                    [
+                        ("Продолжить", "continue_concern", choice),
+                        ("Вернуться к вариантам", "age_group", {"age_group": d["age_group"]}),
+                    ],
+                )
+            else:
+                self.action("continue_concern", choice)
+        elif action == "continue_concern":
+            require(
+                d.get("age_group") in AGE_GROUPS and isinstance(d.get("concern"), dict),
+                "Откройте знакомство заново: /start",
+            )
+            choice = {"age_group": d["age_group"], "concern": d["concern"]}
+            if not self.privacy_gate("continue_concern", choice):
                 return
             self.state_set(step=None, onboarding=True, **choice)
             with transaction(self.app.config["DATABASE"]) as db:
@@ -333,7 +350,7 @@ class Bot:
             self.profile_menu()
         elif action == "consent":
             self.api("/consents", "POST", {"policy_id": d["id"], "accepted": True})
-            if d.get("next_action") in ("choose_concern", "custom_concern"):
+            if d.get("next_action") in ("choose_concern", "continue_concern", "custom_concern"):
                 self.action(d["next_action"], d["choice"])
             else:
                 self.profile_menu()

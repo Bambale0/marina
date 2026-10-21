@@ -20,15 +20,13 @@ def register_content(app):
     @app.get("/api/admin/onboarding-defaults/<age_group>")
     @protected(admin=True)
     def onboarding_defaults(age_group):
-        from .onboarding import AGE_GROUPS, QUESTIONS
+        from .onboarding import AGE_GROUPS, default_concerns
 
         require(age_group in AGE_GROUPS, "Выберите возрастную группу")
         return {
             "title": "Знакомство: " + AGE_GROUPS[age_group][0],
             "age_group": age_group,
-            "concerns": [
-                {"id": str(i), "text": text} for i, text in enumerate(QUESTIONS[age_group], 1)
-            ],
+            "concerns": default_concerns(age_group),
         }
 
     @app.get("/api/admin/content")

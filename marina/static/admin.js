@@ -2,6 +2,7 @@
 const labels = {
   age_group: "Возрастная группа (3-4 / 5-6 / 7-8 / 9-10)",
   concerns: "Вопросы экрана знакомства",
+  description: "Пояснение после выбора вопроса",
   title: "Название",
   owner: "Ответственный",
   status: "Готовность",
@@ -200,7 +201,7 @@ const policyTemplates = {
   ai: { type: "ai", terms: "", model: "", max_output_tokens: 0, daily_jobs: 0 },
 };
 const itemTemplates = {
-  concerns: { id: "", text: "" },
+  concerns: { id: "", text: "", description: "" },
   case_questions: { id: "", text: "", required: true },
   questions: {
     id: "",
@@ -310,6 +311,7 @@ function structuredEditor(data, context = "") {
             ? "number"
             : [
                   "text",
+                  "description",
                   "instructions",
                   "limitations",
                   "terms",
