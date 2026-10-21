@@ -1,0 +1,23 @@
+[Unit]
+Description=Marina private web/API service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=marina
+Group=marina
+WorkingDirectory=/opt/marina/current
+EnvironmentFile=/etc/marina.env
+ExecStart=/opt/marina/current/.venv/bin/gunicorn --bind 127.0.0.1:8075 --workers 2 --threads 2 --timeout 90 marina:create_app()
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/marina
+
+[Install]
+WantedBy=multi-user.target

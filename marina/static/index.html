@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Нейроразвитие дома</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script src="/static/app.js" defer></script>
+    <script src="/static/admin.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <a href="/" class="brand"
+        ><span class="mark">н</span
+        ><span
+          >нейроразвитие<span class="brand-sub">дома, в своём темпе</span></span
+        ></a
+      >
+      <div id="identity"></div>
+    </header>
+    <div class="layout">
+      <aside>
+        <p class="eyebrow">ЛИЧНЫЙ КАБИНЕТ</p>
+        <nav id="navigation"></nav>
+        <div class="aside-note">Маленькие шаги.<br />Устойчивый прогресс.</div>
+      </aside>
+      <main id="main">
+        <div class="hero">
+          <p class="eyebrow">ПОДДЕРЖКА ДЛЯ СЕМЬИ</p>
+          <h1>Развитие начинается<br />с внимания.</h1>
+          <p>
+            Скрининги, помощь специалиста и домашние занятия — в одном месте.
+          </p>
+          <p id="login-state">
+            Откройте приложение из Telegram-бота, чтобы войти в свой кабинет.
+          </p>
+          <a class="button" href="https://t.me/abrakadabra25_bot"
+            >Открыть бота ↗</a
+          >
+        </div>
+      </main>
+    </div>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <dialog id="dialog">
+      <div id="dialog-body"></div>
+      <button id="close-dialog" class="secondary">Закрыть</button>
+    </dialog>
+  </body>
+</html>
