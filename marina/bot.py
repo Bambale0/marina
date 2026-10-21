@@ -122,7 +122,12 @@ class Bot:
     def profile_menu(self):
         items = self.api("/me")["subjects"]
         self.send(
-            "Выберите профиль. Для взрослой ветки ребёнок не требуется.",
+            (
+                "Для кого подберём тест? Выберите свой профиль или добавьте новый. "
+                "Я спрошу только имя и дату рождения — возраст нужен для подбора теста."
+                if self.state["data"].get("onboarding")
+                else "Выберите профиль. Для взрослой ветки ребёнок не требуется."
+            ),
             [
                 (s["data"]["name"], "select", {"id": s["id"]})
                 for s in items
@@ -171,7 +176,21 @@ class Bot:
         self.ask_attempt(result["id"])
 
     def action(self, action, d):
-        if action == "menu":
+        if action == "welcome":
+            self.state_set(step=None, onboarding=False)
+            self.send(
+                "Привет! 👋 Как здорово, что Вы здесь!\n\n"
+                "Добро пожаловать в «Нейроразвитие дома». Давайте познакомимся 💛\n\n"
+                "Начнём с теста для Вас или ребёнка? Я проведу Вас шаг за шагом, "
+                "а после ответов покажу результат с пояснениями.\n\n"
+                "Начнём вместе?",
+                [("пройти тесты", "start_test", {})],
+            )
+        elif action == "start_test":
+            self.state_set(step=None, onboarding=True)
+            self.action("profiles", {})
+        elif action == "menu":
+            self.state_set(step=None, onboarding=False)
             self.send(
                 "Нейроразвитие дома\n\nВыберите следующий шаг. Сервис не ставит диагнозы.",
                 MENU,
@@ -201,7 +220,10 @@ class Bot:
         elif action == "select":
             self.api("/subjects/" + d["id"])
             self.state_set(subject_id=d["id"], step=None)
-            self.send("Профиль выбран.", MENU)
+            if self.state["data"].get("onboarding"):
+                self.action("methods", {})
+            else:
+                self.send("Профиль выбран.", MENU)
         elif action == "add":
             self.state_set(step="profile_name", profile_kind=d["kind"])
             self.send("Как зовут взрослого или ребёнка?")
@@ -209,11 +231,14 @@ class Bot:
             subject = self.selected()
             if not subject:
                 return
+            self.state_set(onboarding=False)
             items = self.api("/catalog/method?subject_id=" + subject["id"])["items"]
             self.send(
-                "Выберите скрининг."
+                "Выберите тест — после ответов покажу результат с пояснениями."
                 if items
-                else "Специалист ещё готовит методики. Они появятся после утверждения.",
+                else "Спасибо за знакомство! Подходящий тест пока готовится. "
+                "Профиль сохранён — когда тест появится, его можно будет найти "
+                "в разделе «Скрининги».",
                 [(m["data"]["title"], "attempt", {"id": m["id"]}) for m in items]
                 + [("В меню", "menu", {})],
             )
@@ -659,8 +684,9 @@ class Bot:
 
     def message(self, message):
         text = message.get("text", "").strip()
-        if text.startswith("/start") or text == "/menu":
-            self.state_set(step=None)
+        if text.startswith("/start"):
+            return self.action("welcome", {})
+        if text == "/menu":
             return self.action("menu", {})
         if text == "/id":
             return self.send("Ваш Telegram ID: " + str(self.user["id"]))
@@ -774,7 +800,10 @@ class Bot:
                 },
             )
             self.state_set(step=None, subject_id=s["id"])
-            self.send("Профиль создан и выбран.", MENU)
+            if self.state["data"].get("onboarding"):
+                self.action("methods", {})
+            else:
+                self.send("Профиль создан и выбран.", MENU)
         elif step == "booking_topic":
             self.state_set(step="booking_preferences", topic=text)
             self.send("Какие дни и время вам удобны? Укажите часовой пояс.")
