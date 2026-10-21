@@ -79,7 +79,10 @@ def test_polling_profile_and_private_identity(app):
 
 
 @pytest.mark.parametrize("test_available", [True, False])
-def test_welcome_funnel_to_test(app, test_available):
+@pytest.mark.parametrize(
+    "group, count", [("3–4 года", 5), ("5–6 лет", 5), ("7–8 лет", 7), ("9–10 лет", 6)]
+)
+def test_welcome_funnel_to_test(app, test_available, group, count):
     from tests.test_identity import login
     from tests.test_screening import method, publish
 
@@ -122,10 +125,22 @@ def test_welcome_funnel_to_test(app, test_available):
 
     send("/start")
     assert "Привет" in sent[-1]["text"]
+    assert all(
+        b["style"] == "success" for row in sent[-1]["reply_markup"]["inline_keyboard"] for b in row
+    )
     assert [[b["text"] for b in row] for row in sent[-1]["reply_markup"]["inline_keyboard"]] == [
         ["пройти тесты"]
     ]
     click("пройти тесты")
+    assert sent[-1]["text"] == "Сколько лет Вашему ребёнку?"
+    assert len(sent[-1]["reply_markup"]["inline_keyboard"]) == 4
+    click(group)
+    assert "С какой проблемой Вы обращаетесь?" in sent[-1]["text"]
+    assert [row[0]["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"]][:-1] == [
+        str(i) for i in range(1, count + 1)
+    ]
+    assert f"{count}. " in sent[-1]["text"]
+    click("1")
     assert "готовит" in sent[-1]["text"]
     admin = login(app)
     publish(
@@ -139,14 +154,32 @@ def test_welcome_funnel_to_test(app, test_available):
         },
     )
     if test_available:
-        publish(admin, "method", method())
+        fixture = method()
+        fixture.update(audience="child", min_months=36, max_months=131)
+        publish(admin, "method", fixture)
     send("/start")
     click("пройти тесты")
+    click(group)
+    click("1")
     assert sent[-1]["text"] == "Test consent"
+    owner_id = login(app, 2).get("/api/me").json["account"]["id"]
+    assert admin.get("/api/admin/accounts/" + owner_id).json["introduction"] is None
     click("Прочитал(а) и принимаю")
-    click("Добавить взрослого")
-    send("Parent")
+    introduction = admin.get("/api/admin/accounts/" + owner_id).json["introduction"]
+    assert introduction["concern"]["id"] == "1"
+    assert (
+        introduction["age_group"]
+        == {"3–4 года": "3-4", "5–6 лет": "5-6", "7–8 лет": "7-8", "9–10 лет": "9-10"}[group]
+    )
+    click("Добавить ребёнка")
+    send("Child")
     send("1990-01-01")
+    assert "не соответствует" in sent[-1]["text"]
+    from datetime import datetime, timezone
+
+    today = datetime.fromtimestamp(app.clock[0], timezone.utc).date()
+    age = {"3–4 года": 3, "5–6 лет": 5, "7–8 лет": 7, "9–10 лет": 9}[group]
+    send(today.replace(year=today.year - age).isoformat())
     assert "тест" in sent[-1]["text"]
     if not test_available:
         assert "Подходящий тест пока готовится" in sent[-1]["text"]
@@ -158,10 +191,12 @@ def test_welcome_funnel_to_test(app, test_available):
     assert "Low" in sent[-1]["text"]
     send("/start")
     click("пройти тесты")
-    click("Parent")
+    click(group)
+    click("1")
+    click("Child")
     assert "тест" in sent[-1]["text"]
     send("/menu")
     assert "Выберите следующий шаг" in sent[-1]["text"]
     send("/profiles")
-    click("Parent")
+    click("Child")
     assert sent[-1]["text"] == "Профиль выбран."

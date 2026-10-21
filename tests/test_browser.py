@@ -55,6 +55,23 @@ def test_browser_admin_and_profile_forms(app):
             page.get_by_label("Основание / причина действия", exact=True).fill("Browser acceptance")
             page.get_by_role("button", name="Сохранить черновик", exact=True).click()
             page.get_by_text("Черновик сохранён", exact=True).wait_for()
+            page.get_by_role("button", name="Контент и настройки", exact=True).click()
+            page.get_by_label("Раздел", exact=True).select_option("onboarding")
+            page.get_by_role("button", name="Создать черновик", exact=True).click()
+            page.get_by_label("Возрастная группа", exact=True).select_option("7-8")
+            page.get_by_role("button", name="Продолжить", exact=True).click()
+            page.get_by_label("Название", exact=True).wait_for()
+            assert page.get_by_label("Название", exact=True).input_value() == "Знакомство: 7–8 лет"
+            texts = page.get_by_label("Текст", exact=True)
+            assert texts.count() == 7
+            texts.first.fill("Отредактированный вопрос?")
+            page.get_by_label("Основание / причина действия", exact=True).fill("Edit introduction")
+            page.get_by_role("button", name="Сохранить черновик", exact=True).click()
+            page.get_by_text("Черновик сохранён", exact=True).wait_for()
+            assert (
+                page.get_by_label("Текст", exact=True).first.input_value()
+                == "Отредактированный вопрос?"
+            )
             page.get_by_role("button", name="Все объекты", exact=True).click()
             page.get_by_role("heading", name="Все объекты", exact=True).wait_for()
             page.get_by_role("button", name="Отчёты", exact=True).click()

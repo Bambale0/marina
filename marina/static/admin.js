@@ -1,5 +1,7 @@
 "use strict";
 const labels = {
+  age_group: "Возрастная группа (3-4 / 5-6 / 7-8 / 9-10)",
+  concerns: "Вопросы экрана знакомства",
   title: "Название",
   owner: "Ответственный",
   status: "Готовность",
@@ -87,6 +89,7 @@ const labels = {
   allow_external_ai: "Разрешена передача текста ИИ-провайдеру",
 };
 const templates = {
+  onboarding: { age_group: "3-4", concerns: [] },
   decision: { owner: "", status: "open", epics: [], evidence: "" },
   material: {
     owner: "",
@@ -197,6 +200,7 @@ const policyTemplates = {
   ai: { type: "ai", terms: "", model: "", max_output_tokens: 0, daily_jobs: 0 },
 };
 const itemTemplates = {
+  concerns: { id: "", text: "" },
   case_questions: { id: "", text: "", required: true },
   questions: {
     id: "",
@@ -387,6 +391,18 @@ async function adminContent() {
 async function editContent(obj, kind) {
   kind = obj?.kind || kind;
   let template = clone(templates[kind] || policyTemplates.commerce);
+  if (kind === "onboarding" && !obj) {
+    const group = selectField("Возрастная группа", [
+      ["3-4", "3–4 года"], ["5-6", "5–6 лет"],
+      ["7-8", "7–8 лет"], ["9-10", "9–10 лет"],
+    ]);
+    modal(form("Выберите экран знакомства", [group], "Продолжить", async () => {
+      const defaults = await api("/admin/onboarding-defaults/" + group.get());
+      $("#dialog").close();
+      await contentForm(null, kind, defaults);
+    }));
+    return;
+  }
   if (kind === "policy" && !obj) {
     const type = selectField(
       "Тип правил",
@@ -404,7 +420,7 @@ async function editContent(obj, kind) {
   await contentForm(obj, kind, template);
 }
 async function contentForm(obj, kind, template) {
-  const title = field("Название", "text", obj?.data.title || "");
+  const title = field("Название", "text", obj?.data.title || template.title || "");
   delete template.title;
   const editor = structuredEditor(template),
     why = field("Основание / причина действия", "textarea");
@@ -1264,6 +1280,7 @@ async function adminAccount(id) {
         telegram_id: data.account.telegram_id,
         blocked: Boolean(data.account.blocked),
         trial: data.trial,
+        "Первое знакомство": data.introduction,
         sessions: data.sessions,
       }),
     ),

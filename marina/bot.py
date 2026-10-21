@@ -7,9 +7,10 @@ import secrets
 import time
 from urllib.request import Request, urlopen
 
-from . import Problem, object_get, require
-from .db import connect, insert, transaction, uid, unpack, update
+from . import Problem, age_months, object_get, require
+from .db import audit, connect, insert, transaction, uid, unpack, update
 from .providers import telegram
+from .onboarding import AGE_GROUPS, screen
 
 MENU = [
     ("Профили", "profiles", {}),
@@ -121,9 +122,25 @@ class Bot:
 
     def profile_menu(self):
         items = self.api("/me")["subjects"]
+        group = (
+            self.state["data"].get("age_group") if self.state["data"].get("onboarding") else None
+        )
+        if group:
+            _, minimum, maximum = AGE_GROUPS[group]
+            items = [
+                s
+                for s in items
+                if s["data"]["kind"] == "child"
+                and minimum <= age_months(s["data"]["birth_date"], self.now) <= maximum
+            ]
         self.send(
             (
-                "Для кого подберём тест? Выберите свой профиль или добавьте новый. "
+                (
+                    "Ваш выбор: " + self.state["data"]["concern"]["text"] + "\n\n"
+                    if self.state["data"].get("concern")
+                    else ""
+                )
+                + "Теперь выберите профиль ребёнка или добавьте новый. "
                 "Я спрошу только имя и дату рождения — возраст нужен для подбора теста."
                 if self.state["data"].get("onboarding")
                 else "Выберите профиль. Для взрослой ветки ребёнок не требуется."
@@ -134,10 +151,51 @@ class Bot:
                 if s["status"] == "active"
             ]
             + [
-                ("Добавить взрослого", "add", {"kind": "adult"}),
+                *([] if group else [("Добавить взрослого", "add", {"kind": "adult"})]),
                 ("Добавить ребёнка", "add", {"kind": "child"}),
                 ("В меню", "menu", {}),
             ],
+        )
+
+    def privacy_gate(self, next_action="profiles", choice=None):
+        privacy = self.api("/privacy")
+        if privacy["accepted"]:
+            return True
+        if not privacy["policy"]:
+            self.send(
+                "Специалист готовит условия обработки данных. Ввод данных пока закрыт.",
+                [("В меню", "menu", {})],
+            )
+        else:
+            self.send(
+                privacy["policy"]["data"]["terms"],
+                [
+                    (
+                        "Прочитал(а) и принимаю",
+                        "consent",
+                        {
+                            "id": privacy["policy"]["id"],
+                            "next_action": next_action,
+                            "choice": choice,
+                        },
+                    )
+                ],
+            )
+        return False
+
+    def check_onboarding_age(self, data):
+        group = self.state["data"].get("age_group")
+        if not self.state["data"].get("onboarding") or not group:
+            return
+        _, minimum, maximum = AGE_GROUPS[group]
+        try:
+            months = age_months(data.get("birth_date", ""), self.now)
+        except (TypeError, ValueError):
+            raise Problem("Неверная дата рождения") from None
+        require(
+            data.get("kind") == "child" and minimum <= months <= maximum,
+            "Дата рождения не соответствует выбранной группе. "
+            "Проверьте дату или начните заново: /start",
         )
 
     def ask_attempt(self, id):
@@ -177,7 +235,7 @@ class Bot:
 
     def action(self, action, d):
         if action == "welcome":
-            self.state_set(step=None, onboarding=False)
+            self.state_set(step=None, onboarding=False, age_group=None, concern=None)
             self.send(
                 "Привет! 👋 Как здорово, что Вы здесь!\n\n"
                 "Добро пожаловать в «Нейроразвитие дома». Давайте познакомимся 💛\n\n"
@@ -187,8 +245,47 @@ class Bot:
                 [("пройти тесты", "start_test", {})],
             )
         elif action == "start_test":
-            self.state_set(step=None, onboarding=True)
-            self.action("profiles", {})
+            self.state_set(step=None, onboarding=True, age_group=None, concern=None)
+            self.send(
+                "Сколько лет Вашему ребёнку?",
+                [
+                    (label, "age_group", {"age_group": group})
+                    for group, (label, _, _) in AGE_GROUPS.items()
+                ],
+            )
+        elif action == "age_group":
+            group = d.get("age_group")
+            with connect(self.app.config["DATABASE"]) as db:
+                items = screen(db, group)
+            text = "\n".join(f"{i}. {item['text']}" for i, item in enumerate(items, 1))
+            self.send(
+                f"{AGE_GROUPS[group][0]}\n\nС какой проблемой Вы обращаетесь?\n\n{text}\n\n"
+                "Выберите один подходящий вариант кнопкой ниже.",
+                [
+                    (str(i), "choose_concern", {"age_group": group, "concern": item})
+                    for i, item in enumerate(items, 1)
+                ]
+                + [("Изменить возраст", "start_test", {})],
+            )
+        elif action == "choose_concern":
+            require(
+                d.get("age_group") in AGE_GROUPS and isinstance(d.get("concern"), dict),
+                "Откройте знакомство заново: /start",
+            )
+            choice = {"age_group": d["age_group"], "concern": d["concern"]}
+            if not self.privacy_gate("choose_concern", choice):
+                return
+            self.state_set(step=None, onboarding=True, **choice)
+            with transaction(self.app.config["DATABASE"]) as db:
+                audit(
+                    db,
+                    self.owner,
+                    "bot.introduction",
+                    self.state,
+                    self.now,
+                    "Пользователь выбрал проблему при знакомстве",
+                )
+            self.profile_menu()
         elif action == "menu":
             self.state_set(step=None, onboarding=False)
             self.send(
@@ -196,35 +293,29 @@ class Bot:
                 MENU,
             )
         elif action == "profiles":
-            privacy = self.api("/privacy")
-            if not privacy["accepted"]:
-                if not privacy["policy"]:
-                    return self.send(
-                        "Специалист готовит условия обработки данных. Ввод данных пока закрыт.",
-                        [("В меню", "menu", {})],
-                    )
-                return self.send(
-                    privacy["policy"]["data"]["terms"],
-                    [
-                        (
-                            "Прочитал(а) и принимаю",
-                            "consent",
-                            {"id": privacy["policy"]["id"]},
-                        )
-                    ],
-                )
+            if not self.privacy_gate():
+                return
             self.profile_menu()
         elif action == "consent":
             self.api("/consents", "POST", {"policy_id": d["id"], "accepted": True})
-            self.profile_menu()
+            if d.get("next_action") == "choose_concern":
+                self.action("choose_concern", d["choice"])
+            else:
+                self.profile_menu()
         elif action == "select":
-            self.api("/subjects/" + d["id"])
+            subject = self.api("/subjects/" + d["id"])
+            self.check_onboarding_age(subject["data"])
             self.state_set(subject_id=d["id"], step=None)
             if self.state["data"].get("onboarding"):
                 self.action("methods", {})
             else:
                 self.send("Профиль выбран.", MENU)
         elif action == "add":
+            require(
+                not (self.state["data"].get("onboarding") and self.state["data"].get("age_group"))
+                or d["kind"] == "child",
+                "Для этого маршрута выберите профиль ребёнка",
+            )
             self.state_set(step="profile_name", profile_kind=d["kind"])
             self.send("Как зовут взрослого или ребёнка?")
         elif action == "methods":
@@ -789,6 +880,7 @@ class Bot:
             )
         elif step == "profile_birth":
             d = self.state["data"]
+            self.check_onboarding_age({"birth_date": text, "kind": d["profile_kind"]})
             s = self.api(
                 "/subjects",
                 "POST",

@@ -34,6 +34,22 @@ def remote(app, method, url, data=None, headers=None, timeout=8):
 
 def telegram(app, method, data):
     require(app.config["BOT_TOKEN"], "Telegram не настроен", 503)
+    markup = data.get("reply_markup")
+    if isinstance(markup, dict):
+        markup = dict(markup)
+        for key in ("inline_keyboard", "keyboard"):
+            if key in markup:
+                markup[key] = [
+                    [
+                        {
+                            **(button if isinstance(button, dict) else {"text": button}),
+                            "style": "success",
+                        }
+                        for button in row
+                    ]
+                    for row in markup[key]
+                ]
+        data = {**data, "reply_markup": markup}
     result = remote(
         app,
         "POST",

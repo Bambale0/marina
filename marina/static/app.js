@@ -64,6 +64,7 @@ const kinds = {
   selection: "Правила подбора",
   course: "Курсы",
   template: "Шаблоны",
+  onboarding: "Экраны знакомства",
   report: "Отчёт PDF",
   case: "Разбор",
   booking: "Встреча",
@@ -164,7 +165,7 @@ function field(label, type = "text", value = "") {
   };
 }
 function selectField(label, values, value) {
-  const input = el("select");
+  const input = el("select", { "aria-label": label });
   for (const [v, t] of values) input.append(el("option", { value: v }, t));
   if (value != null) input.value = value;
   return { node: el("label", {}, label, input), input, get: () => input.value };

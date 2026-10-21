@@ -437,8 +437,20 @@ def create_app(config=None):
         account = g.db.execute("SELECT * FROM accounts WHERE id=?", (id,)).fetchone()
         require(account, "Аккаунт не найден", 404)
         trial = g.db.execute("SELECT starts,ends FROM trials WHERE account_id=?", (id,)).fetchone()
+        state = unpack(
+            g.db.execute(
+                "SELECT * FROM objects WHERE kind='bot_state' AND owner=?", (id,)
+            ).fetchone()
+        )
+        introduction = None
+        if state and state["data"].get("concern"):
+            introduction = {
+                "age_group": state["data"].get("age_group"),
+                "concern": state["data"]["concern"],
+            }
         return {
             "account": dict(account),
+            "introduction": introduction,
             "trial": dict(trial) if trial else None,
             "objects": [
                 unpack(r)
