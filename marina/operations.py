@@ -36,13 +36,17 @@ def verify_backup(path):
 def notify(app, owner, object_id, event):
     from .providers import telegram
 
+    if event == "crm.video_received":
+        from .crm import notify_review_video
+
+        return notify_review_video(app, owner, object_id)
+
     with connect(app.config["DATABASE"]) as db:
         account = db.execute("SELECT telegram_id FROM accounts WHERE id=?", (owner,)).fetchone()
     if event.startswith("sla.") or event in (
         "case.submitted",
         "case.followup",
         "booking.requested",
-        "crm.video_received",
         "crm.contact_due",
         "lesson.review_required",
     ):

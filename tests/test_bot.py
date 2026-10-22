@@ -162,7 +162,7 @@ def test_welcome_funnel_to_video_review(app, tmp_path, group, count):
             "retention_days": 30,
         },
     )
-    choose_task(1)
+    # The blocked screen retains the selected task: retry after policy publication.
     click("Прислать видео специалисту")
     assert sent[-1]["text"] == "Test consent"
     click("Прочитал(а) и принимаю")
