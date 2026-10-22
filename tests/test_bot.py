@@ -4,6 +4,93 @@ from marina.bot import handle_update
 from tests.test_identity import app
 
 
+def test_offer_document_is_complete_published_and_separate_from_consent(app):
+    from tests.test_identity import login
+    from tests.test_screening import publish
+
+    client, admin = login(app, 2), login(app)
+    assert client.get("/api/offer").status_code == 404
+    text = "Оферта\n\n" + "Полный текст договора.\n" * 500
+    offer = publish(admin, "template", {"type": "offer", "text": text})
+    admin.post(
+        "/api/admin/content",
+        json={
+            "kind": "template",
+            "title": "Unapproved offer",
+            "data": {"type": "offer", "text": "draft"},
+            "reason": "New draft must not replace publication",
+        },
+    )
+    assert client.get("/api/offer").json["text"] == text
+    assert client.get("/api/offer").json["id"] == offer["id"]
+    assert client.get("/api/privacy").json == {"policy": None, "accepted": False}
+    files, messages = [], []
+    app.config["FILE_TRANSPORT"] = lambda *args: files.append(args)
+    app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: messages.append(data) or {
+        "ok": True,
+        "result": {},
+    }
+    handle_update(
+        app,
+        {
+            "update_id": 8000,
+            "message": {
+                "from": {"id": 2},
+                "chat": {"id": 2, "type": "private"},
+                "text": "/offer",
+            },
+        },
+    )
+    assert files == [
+        (2, "offer.txt", text.encode("utf-8"), "text/plain; charset=utf-8", "sendDocument")
+    ]
+    assert "Оферта" in messages[-1]["text"]
+    # Opening the document from the blocked task keeps the continuation callback.
+    from marina.bot import Bot
+
+    from marina.onboarding import AGE_GROUPS
+
+    choice = {
+        "age_group": next(iter(AGE_GROUPS)),
+        "concern": {"id": "fixture", "text": "Fixture concern"},
+    }
+    bot = Bot(app, {"id": 2}, 2, 8001)
+    bot.action("submit_review_video", choice)
+    button = messages[-1]["reply_markup"]["inline_keyboard"][0][0]
+    assert button["text"] == "Оферта"
+
+    def click(button, update_id):
+        handle_update(
+            app,
+            {
+                "update_id": update_id,
+                "callback_query": {
+                    "id": "offer",
+                    "from": {"id": 2},
+                    "data": button["callback_data"],
+                    "message": {"chat": {"id": 2, "type": "private"}},
+                },
+            },
+        )
+
+    click(button, 8002)
+    assert len(files) == 2 and files[-1][2] == text.encode("utf-8")
+    button = messages[-1]["reply_markup"]["inline_keyboard"][0][0]
+    assert button["text"] == "Продолжить"
+    publish(
+        admin,
+        "policy",
+        {
+            "type": "privacy",
+            "terms": "Separate consent",
+            "media_max_bytes": 1000000,
+            "retention_days": 30,
+        },
+    )
+    click(button, 8003)
+    assert messages[-1]["text"] == "Separate consent"
+
+
 def test_polling_profile_and_private_identity(app):
     sent = []
     app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: sent.append(

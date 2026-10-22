@@ -17,6 +17,17 @@ KINDS = {
 
 
 def register_content(app):
+    @app.get("/api/offer")
+    @protected()
+    def published_offer():
+        row = g.db.execute(
+            "SELECT * FROM objects WHERE kind='template' AND status='published' "
+            "AND json_extract(data,'$.type')='offer' ORDER BY updated DESC,rowid DESC LIMIT 1"
+        ).fetchone()
+        require(row, "Оферта пока не опубликована", 404)
+        obj = unpack(row)
+        return {"id": obj["id"], "title": obj["data"]["title"], "text": obj["data"]["text"]}
+
     @app.get("/api/admin/onboarding-defaults/<age_group>")
     @protected(admin=True)
     def onboarding_defaults(age_group):
