@@ -20,6 +20,7 @@ MENU = [
     ("Курсы", "courses", {}),
     ("Консультация", "booking", {}),
     ("Мои обращения", "history", {}),
+    ("Оферта", "offer", {}),
 ]
 
 
@@ -193,6 +194,10 @@ class Bot:
             buttons = [("В меню", "menu", {})]
             if next_action == "submit_review_video":
                 buttons.insert(0, ("Прислать видео специалисту", next_action, choice or {}))
+            if self.client.get("/api/offer").status_code == 200:
+                buttons.insert(
+                    0, ("Оферта", "offer", {"next_action": next_action, "choice": choice})
+                )
             self.send(
                 "Специалист готовит условия обработки данных. Ввод данных пока закрыт.",
                 buttons,
@@ -292,7 +297,20 @@ class Bot:
         )
 
     def action(self, action, d):
-        if action == "welcome":
+        if action == "offer":
+            offer = self.api("/offer")
+            send_file(
+                self.app,
+                self.chat,
+                "offer.txt",
+                offer["text"].encode("utf-8"),
+                "text/plain; charset=utf-8",
+            )
+            buttons = MENU
+            if d.get("next_action"):
+                buttons = [("Продолжить", d["next_action"], d.get("choice") or {})]
+            self.send("Оферта — полный текст в файле выше. Вы можете сохранить его.", buttons)
+        elif action == "welcome":
             self.state_set(
                 step=None, onboarding=False, age_group=None, concern=None, onboarding_next=None
             )
@@ -1011,6 +1029,8 @@ class Bot:
 
     def message(self, message):
         text = message.get("text", "").strip()
+        if text == "/offer":
+            return self.action("offer", {})
         if text.startswith("/start"):
             return self.action("welcome", {})
         if text == "/menu":
