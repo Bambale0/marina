@@ -29,9 +29,10 @@ def register_privacy(app):
             "Файл уже изменён",
             409,
         )
-        case = object_get(g.db, media["data"]["case_id"], "case")
+        case = object_get(g.db, media["data"].get("review_id") or media["data"].get("case_id"))
         require(
-            case["status"] == "closed" and media["data"].get("expires", g.now + 1) <= g.now,
+            case["status"] in ("closed", "completed")
+            and media["data"].get("expires", g.now + 1) <= g.now,
             "Есть активное обязательство или срок хранения ещё не истёк",
         )
         g.db.execute("PRAGMA secure_delete=ON")

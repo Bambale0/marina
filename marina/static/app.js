@@ -18,6 +18,12 @@ let token = sessionStorage.getItem("marina-token"),
   current,
   selected = sessionStorage.getItem("subject");
 const states = {
+  awaiting_video: "Ожидаем видео",
+  video_received: "Видео получено",
+  in_review: "На просмотре",
+  conclusion_sent: "Заключение отправлено",
+  invited: "Приглашён на диагностику",
+  booked: "Записан",
   awaiting_payment: "Ожидает оплаты",
   prepared: "Готов к запуску",
   refunded: "Возвращено",
@@ -48,6 +54,7 @@ const states = {
   valid: "Расчёт готов",
 };
 const kinds = {
+  video_review: "Видео и диагностика",
   plan: "Будущий комплекс",
   media: "Медиафайл",
   retention_task: "Срок хранения файла",
@@ -223,6 +230,7 @@ async function refresh() {
   if (me.account.role === "admin")
     pages.push(
       ["queue", "Очередь специалиста", adminQueue],
+      ["crm", "CRM", adminCrm],
       ["content", "Контент и настройки", adminContent],
       ["accounts", "Клиенты", adminAccounts],
       ["operations", "Эксплуатация", operations],

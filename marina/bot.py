@@ -11,7 +11,7 @@ from . import Problem, age_months, object_get, require
 from .db import audit, connect, insert, transaction, uid, unpack, update
 from .providers import telegram
 from .onboarding import AGE_GROUPS, screen
-from .intro_activities import ACTIVITY_INTRO, OBSERVATION_PROMPT
+from .intro_activities import ACTIVITY_INTRO
 
 MENU = [
     ("Профили", "profiles", {}),
@@ -261,9 +261,38 @@ class Bot:
         result = self.api("/attempts/" + id + "/complete", "POST", {"revision": a["revision"]})
         self.ask_attempt(result["id"])
 
+    def after_profile(self):
+        if self.state["data"].get("onboarding_next") != "video_review":
+            return self.action("methods", {})
+        subject = self.selected()
+        if not subject:
+            return
+        review = self.api(
+            "/video-reviews",
+            "POST",
+            {
+                "subject_id": subject["id"],
+                "concern": self.state["data"]["concern"],
+                "key": "review:" + self.state["id"] + ":" + self.update_id,
+            },
+        )
+        self.state_set(
+            step="review_video",
+            video_review_id=review["id"],
+            onboarding=False,
+            onboarding_next=None,
+        )
+        self.send(
+            "Пришлите видео выполнения выбранного задания одним сообщением: видео или файл MP4, до 20 МБ "
+            "и в пределах лимита из условий обработки данных. Можно добавить пояснение в подписи.\n\n"
+            "Видео посмотрит специалист, подготовит мини-заключение и предложит запись на полную диагностику."
+        )
+
     def action(self, action, d):
         if action == "welcome":
-            self.state_set(step=None, onboarding=False, age_group=None, concern=None)
+            self.state_set(
+                step=None, onboarding=False, age_group=None, concern=None, onboarding_next=None
+            )
             self.send(
                 "Привет! 👋 Как здорово, что Вы здесь!\n\n"
                 "Добро пожаловать в «Нейроразвитие дома». Давайте познакомимся 💛\n\n"
@@ -273,7 +302,9 @@ class Bot:
                 [("пройти тесты", "start_test", {})],
             )
         elif action == "start_test":
-            self.state_set(step=None, onboarding=True, age_group=None, concern=None)
+            self.state_set(
+                step=None, onboarding=True, age_group=None, concern=None, onboarding_next=None
+            )
             self.send(
                 "Сколько лет Вашему ребёнку?",
                 [
@@ -317,7 +348,9 @@ class Bot:
             )
             choice = {"age_group": d["age_group"], "concern": d["concern"]}
             self.state_set(step=None)
-            next_action = "activity_menu" if d["concern"].get("activities") else "continue_concern"
+            next_action = (
+                "activity_menu" if d["concern"].get("activities") else "submit_review_video"
+            )
             description = d["concern"].get("description", "")
             if description:
                 self.send(
@@ -372,7 +405,7 @@ class Bot:
                 + concern["observation_focus"]
                 + ("\n\n" + concern["activity_note"] if concern.get("activity_note") else ""),
                 [
-                    ("Записать наблюдение", "observe_activity", selected),
+                    ("Прислать видео специалисту", "submit_review_video", selected),
                     (
                         "Выбрать другой вариант",
                         "activity_menu",
@@ -380,27 +413,30 @@ class Bot:
                     ),
                 ],
             )
-        elif action == "observe_activity":
+        elif action == "submit_review_video":
             require(
-                d.get("age_group") in AGE_GROUPS
-                and isinstance(d.get("concern"), dict)
-                and d["concern"].get("selected_activity"),
-                "Сначала выберите задание",
+                d.get("age_group") in AGE_GROUPS and isinstance(d.get("concern"), dict),
+                "Сначала выберите проблему и задание",
             )
             choice = {"age_group": d["age_group"], "concern": d["concern"]}
-            if not self.privacy_gate("observe_activity", choice):
+            if not self.privacy_gate("submit_review_video", choice):
                 return
-            self.state_set(step="activity_observation", onboarding=True, **choice)
+            self.state_set(step=None, onboarding=True, onboarding_next="video_review", **choice)
+            self.profile_menu()
+        elif action == "crm_booking":
+            review = self.api("/video-reviews/" + d["id"])
+            require(review["status"] in ("invited", "booked"), "Приглашение ещё не отправлено")
+            if not self.privacy_gate("crm_booking", {"id": d["id"]}):
+                return
+            self.state_set(step="booking_preferences", crm_review_id=d["id"])
             self.send(
-                OBSERVATION_PROMPT,
-                [
-                    (
-                        "Вернуться к заданию",
-                        "choose_activity",
-                        {**choice, "activity_id": d["concern"]["selected_activity"]["id"]},
-                    )
-                ],
+                "Запишем Вас на полную диагностику. Какие дни и время удобны? Укажите часовой пояс."
             )
+        elif action == "crm_reschedule":
+            self.api("/bookings/" + d["id"] + "/reschedule", "POST", {})
+            self.send("Запрос передан. Специалист предложит другое время.", MENU)
+        elif action == "observe_activity":
+            self.action("submit_review_video", d)
         elif action == "continue_concern":
             require(
                 d.get("age_group") in AGE_GROUPS and isinstance(d.get("concern"), dict),
@@ -439,6 +475,8 @@ class Bot:
                 "continue_concern",
                 "custom_concern",
                 "observe_activity",
+                "submit_review_video",
+                "crm_booking",
             ):
                 self.action(d["next_action"], d["choice"])
             else:
@@ -448,7 +486,7 @@ class Bot:
             self.check_onboarding_age(subject["data"])
             self.state_set(subject_id=d["id"], step=None)
             if self.state["data"].get("onboarding"):
-                self.action("methods", {})
+                self.after_profile()
             else:
                 self.send("Профиль выбран.", MENU)
         elif action == "add":
@@ -501,14 +539,24 @@ class Bot:
             self.ask_attempt(d["id"])
         elif action == "booking":
             if self.selected():
-                self.state_set(step="booking_topic")
+                self.state_set(step="booking_topic", crm_review_id=None)
                 self.send("Кратко опишите, что хотите обсудить на встрече.")
         elif action == "history":
             items = self.api("/history")["items"]
             items = [
                 o
                 for o in items
-                if o["kind"] in ("report", "case", "booking", "order", "attempt", "lesson", "right")
+                if o["kind"]
+                in (
+                    "video_review",
+                    "report",
+                    "case",
+                    "booking",
+                    "order",
+                    "attempt",
+                    "lesson",
+                    "right",
+                )
             ]
             self.send(
                 "Ваши обращения и результаты." if items else "Пока нет обращений.",
@@ -771,6 +819,20 @@ class Bot:
         )
 
     def card(self, id, kind):
+        if kind == "video_review":
+            obj = self.api("/video-reviews/" + id)
+            from .crm import STATES
+
+            return self.send(
+                STATES[obj["status"]]
+                + "\n\n"
+                + obj["data"]["problem"]
+                + ("\n\n" + obj["data"]["conclusion"] if obj["data"].get("conclusion") else "")
+                + ("\n\n" + obj["data"]["invitation"] if obj["data"].get("invitation") else ""),
+                [("Записаться на диагностику", "crm_booking", {"id": id})]
+                if obj["status"] == "invited"
+                else [("В меню", "menu", {})],
+            )
         if kind == "attempt":
             return self.ask_attempt(id)
         if kind == "lesson":
@@ -863,15 +925,45 @@ class Bot:
                     {"id": id, "command": "cases/followup-answer"},
                 ),
             ]
+        elif o["kind"] == "video_review":
+            buttons = [
+                (
+                    "Взять на просмотр",
+                    "admin_command",
+                    {"id": id, "route": "crm", "command": "take"},
+                ),
+                (
+                    "Подтвердить просмотр видео",
+                    "admin_command",
+                    {"id": id, "route": "crm", "command": "viewed"},
+                ),
+                ("Написать мини-заключение", "admin_text", {"id": id, "command": "crm/conclusion"}),
+                (
+                    "Отправить мини-заключение",
+                    "admin_command",
+                    {"id": id, "route": "crm", "command": "send-conclusion"},
+                ),
+                ("Пригласить на диагностику", "admin_text", {"id": id, "command": "crm/invite"}),
+            ]
+            if d.get("conclusion_draft"):
+                self.send("Черновик мини-заключения:\n" + d["conclusion_draft"])
         if o["kind"] == "report" and d.get("revisions"):
             self.send("Текущая редакция для проверки:\n" + d["revisions"][-1]["text"])
-        if o["kind"] == "case":
+        if o["kind"] in ("case", "video_review"):
             self.send("Анкета: " + json.dumps(d.get("answers", {}), ensure_ascii=False))
             media = self.api("/admin/objects/" + id).get("media", [])
             for item in media:
                 response = self.client.get("/api/media/" + item["id"])
                 if response.status_code == 200:
-                    send_file(self.app, self.chat, "material", response.data, item["mime"])
+                    review_video = o["kind"] == "video_review" and item["mime"] == "video/mp4"
+                    send_file(
+                        self.app,
+                        self.chat,
+                        "client-video.mp4" if review_video else "material",
+                        response.data,
+                        item["mime"],
+                        "sendVideo" if review_video else "sendDocument",
+                    )
         self.send(
             o["kind"]
             + " · "
@@ -953,6 +1045,60 @@ class Bot:
                 + code
             )
         step = self.state["data"].get("step")
+        if step == "review_video":
+            attachment = message.get("video") or message.get("document")
+            require(
+                attachment, "Отправьте видео или файл MP4. Текст можно добавить в подпись к видео."
+            )
+            privacy = self.api("/privacy")
+            require(privacy["accepted"], "Сначала примите актуальные условия обработки данных")
+            limit = min(privacy["policy"]["data"].get("media_max_bytes", 0), 20 * 1024 * 1024)
+            require(
+                limit > 0 and attachment.get("file_size", 0) <= limit,
+                "Видео превышает допустимый размер",
+            )
+            info = telegram(self.app, "getFile", {"file_id": attachment["file_id"]})
+            path = info.get("file_path", "")
+            require(
+                path and ".." not in path and not path.startswith("/"), "Не удалось прочитать видео"
+            )
+            try:
+                if self.app.config.get("TELEGRAM_FILE_TRANSPORT"):
+                    content = self.app.config["TELEGRAM_FILE_TRANSPORT"](path, limit)
+                else:
+                    with urlopen(
+                        "https://api.telegram.org/file/bot"
+                        + self.app.config["BOT_TOKEN"]
+                        + "/"
+                        + path,
+                        timeout=20,
+                    ) as response:
+                        content = response.read(limit + 1)
+            except Exception:
+                raise Problem(
+                    "Не удалось скачать видео. Попробуйте отправить его ещё раз."
+                ) from None
+            require(0 < len(content) <= limit, "Видео превышает допустимый размер")
+            result = self.client.post(
+                "/api/video-reviews/" + self.state["data"]["video_review_id"] + "/video",
+                data={
+                    "file": (
+                        io.BytesIO(content),
+                        "video.mp4",
+                        attachment.get("mime_type", "video/mp4"),
+                    ),
+                    "note": message.get("caption", ""),
+                },
+            )
+            require(
+                result.status_code < 400, result.json.get("error", "Не удалось сохранить видео")
+            )
+            self.state_set(step=None)
+            return self.send(
+                "Спасибо! Видео получено и передано в очередь специалиста. "
+                "Мини-заключение и приглашение на диагностику придут в этот чат.",
+                MENU,
+            )
         if step in ("case_problem", "case_question") and (
             message.get("video")
             or message.get("audio")
@@ -994,6 +1140,7 @@ class Bot:
                 1 <= len(text) <= 3000 and not text.startswith("/"),
                 "Запишите наблюдение текстом: от 1 до 3000 символов.",
             )
+            self.state_set(onboarding_next="video_review")
             self.action(
                 "continue_concern",
                 {
@@ -1058,13 +1205,23 @@ class Bot:
             )
             self.state_set(step=None, subject_id=s["id"])
             if self.state["data"].get("onboarding"):
-                self.action("methods", {})
+                self.after_profile()
             else:
                 self.send("Профиль создан и выбран.", MENU)
         elif step == "booking_topic":
             self.state_set(step="booking_preferences", topic=text)
             self.send("Какие дни и время вам удобны? Укажите часовой пояс.")
         elif step == "booking_preferences":
+            if self.state["data"].get("crm_review_id"):
+                self.api(
+                    "/video-reviews/" + self.state["data"]["crm_review_id"] + "/book",
+                    "POST",
+                    {"preferences": text},
+                )
+                self.state_set(step=None, crm_review_id=None)
+                return self.send(
+                    "Заявка на полную диагностику передана. Специалист предложит время.", MENU
+                )
             s = self.selected()
             if s:
                 self.api(

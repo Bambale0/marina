@@ -635,6 +635,7 @@ function details(value) {
 async function adminCard(id) {
   const card = await api("/admin/objects/" + id),
     o = card.object;
+  if (o.kind === "video_review") return adminCrmCard(id);
   if (templates[o.kind] || o.kind === "policy") return editContent(o);
   if (o.kind === "subject") return editAdminSubject(o);
   const panel = el(
@@ -1376,4 +1377,88 @@ async function analyticsPage() {
     result,
   );
   await load();
+}
+
+async function adminCrm() {
+  const initial = await api('/admin/crm');
+  const state = selectField('Статус CRM', [['', 'Все статусы'], ...Object.entries(initial.states)]);
+  const specialist = selectField('Ответственный специалист', [['', 'Все специалисты'], ...initial.specialists.map(s => [s.id, s.name])]);
+  const search = field('Поиск клиента или проблемы');
+  const list = el('div', {class: 'stack'});
+  async function load() {
+    const data = await api('/admin/crm?status='+encodeURIComponent(state.get())+'&assigned_to='+encodeURIComponent(specialist.get())+'&q='+encodeURIComponent(search.get()));
+    list.replaceChildren(
+      el('p', {class:'quiet'}, data.truncated ? 'Показаны последние 200 карточек. Уточните фильтры.' : 'Карточек: '+data.items.length),
+      ...data.items.map(o => el('article', {class:'card'},
+        el('h2', {}, o.client_name), badge(data.states[o.status]),
+        el('p', {}, o.data.problem),
+        el('p', {class:'quiet'}, 'Ответственный: '+(data.specialists.find(s=>s.id===o.data.assigned_to)?.name || 'Не назначен')),
+        el('p', {class:o.data.next_contact && o.data.next_contact < Date.now()/1000 ? 'overdue' : 'quiet'},
+          'Следующий контакт: '+dateTime(o.data.next_contact)),
+        button('Открыть карточку', ()=>adminCrmCard(o.id)))),
+    );
+  }
+  state.input.onchange = () => safe(load);
+  specialist.input.onchange = () => safe(load);
+  main(heading('CRM', 'Видео → просмотр → мини-заключение → приглашение → запись → диагностика'),
+    el('div', {class:'row'}, state.node, specialist.node, search.node, button('Найти', load, true)), list);
+  await load();
+}
+
+async function adminCrmCard(id) {
+  const card = await api('/admin/crm/'+id), o=card.object, d=o.data;
+  const why = field('Причина действия', 'textarea');
+  const act = async (action, data={}) => {
+    await api('/admin/crm/'+id+'/'+action, 'POST', {revision:o.revision, reason:why.get(), ...data});
+    await adminCrmCard(id);
+  };
+  const assigned = selectField('Ответственный специалист', [['','Выберите специалиста'], ...card.specialists.map(s=>[s.id,s.name])], d.assigned_to || '');
+  const next = field('Следующий контакт (МСК)', 'datetime-local', d.next_contact ? new Date((d.next_contact+10800)*1000).toISOString().slice(0,16) : '');
+  const comment = field('Новый внутренний комментарий', 'textarea');
+  const conclusion = field('Мини-заключение специалиста', 'textarea', d.conclusion_draft || '');
+  const invitation = field('Приглашение на полную диагностику', 'textarea', '');
+  const panel = el('div', {class:'stack'},
+    heading('CRM: '+card.account.name, card.states[o.status]),
+    el('div', {class:'row'}, button('К CRM', adminCrm, true), button('Карточка клиента', ()=>adminAccount(o.owner), true)),
+    el('section', {class:'card'}, el('h2', {}, card.subject.data.name),
+      el('p', {}, 'Проблема: '+d.problem),
+      el('p', {}, 'Задание: '+(d.activity?.title || 'Свой вариант')),
+      el('p', {}, 'Подпись к видео: '+(d.client_note || '—')),
+      el('p', {class:'quiet'}, 'Telegram ID: '+card.account.telegram_id)),
+    el('section', {class:'card stack'}, why.node, assigned.node,
+      button('Назначить ответственного', ()=>act('assign', {assigned_to:assigned.get()})),
+      next.node, button('Сохранить дату контакта', ()=>act('next-contact', {next_contact:next.get() ? Date.parse(next.get()+':00+03:00')/1000 : null})),
+      comment.node, button('Добавить комментарий', ()=>act('comment', {text:comment.get()}))),
+  );
+  if (d.video_id) {
+    const player=el('video', {controls:'', preload:'metadata', class:'crm-video'});
+    let videoUrl;
+    const cleanup=new MutationObserver(()=>{if(!player.isConnected){if(videoUrl)URL.revokeObjectURL(videoUrl);cleanup.disconnect();}});
+    cleanup.observe($('#main'), {childList:true});
+    panel.append(el('section', {class:'card stack'}, el('h2', {}, 'Видео клиента'), player,
+      button('Открыть видео', async()=>{if(videoUrl)URL.revokeObjectURL(videoUrl); videoUrl=await authenticatedFile('/media/'+d.video_id); player.src=videoUrl;}),
+      button('Скачать видео', async()=>{const src=await authenticatedFile('/media/'+d.video_id);const link=el('a',{href:src,download:'client-video.mp4'});link.click();setTimeout(()=>URL.revokeObjectURL(src),30000);}, true),
+      el('p',{class:'quiet'},'Если видео не запускается, скачайте его для просмотра.'),
+      button('Взять на просмотр', ()=>act('take')),
+      button('Подтверждаю просмотр видео', ()=>act('viewed')),
+      el('p', {class:'quiet'}, d.viewed ? 'Просмотр подтверждён: '+dateTime(d.viewed.at) : 'Просмотр ещё не подтверждён')));
+  }
+  panel.append(el('section', {class:'card stack'}, el('h2', {}, 'Ответ специалиста'), conclusion.node,
+    button('Сохранить мини-заключение', ()=>act('conclusion', {text:conclusion.get()})),
+    button('Отправить мини-заключение клиенту', ()=>act('send-conclusion')),
+    d.conclusion ? el('p', {}, 'Отправлено: '+d.conclusion) : null,
+    invitation.node, button('Отправить приглашение на диагностику', ()=>act('invite', {text:invitation.get()})),
+    d.invitation ? el('p', {}, 'Приглашение: '+d.invitation) : null,
+    d.pending_message_id ? el('p', {}, 'Сообщение в очереди. Статус обновится после подтверждения отправки Telegram.') : null));
+  if (card.delivery?.status === 'failed') panel.append(button('Повторить доставку', async()=>{
+    await api('/admin/outbox/'+card.delivery.id+'/retry', 'POST', {reason:why.get()}); await adminCrmCard(id);
+  }));
+  if (d.booking_id) panel.append(button('Открыть запись на диагностику', ()=>adminCard(d.booking_id)));
+  panel.append(el('section', {class:'card'}, el('h2', {}, 'Внутренние комментарии'),
+    ...d.comments.map(c=>el('p', {}, dateTime(c.at)+' · '+c.text))),
+    el('section', {class:'card'}, el('h2', {}, 'История изменений'),
+      ...card.audit.map(a=>el('p', {}, dateTime(a.at)+' · '+a.action+' · '+a.reason))),
+    button('Обновить карточку', ()=>adminCrmCard(id), true),
+    button('Закрыть обращение', ()=>act('close'), true));
+  main(panel);
 }

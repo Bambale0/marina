@@ -499,6 +499,9 @@ def register_services(app):
             obj["revision"],
         )
         emit(g.db, obj["owner"], id, "booking." + action, g.now)
+        from .crm import sync_booking
+
+        sync_booking(g.db, result, g.now, g.actor["id"], why)
         return result
 
     @app.get("/api/bookings/<id>")
@@ -512,6 +515,8 @@ def register_services(app):
         obj = object_get(g.db, id, "booking", g.actor["id"])
         d = body()
         require(action in ("confirm", "reschedule", "cancel"), "Неизвестное действие", 404)
+        if action in ("reschedule", "cancel"):
+            require(obj["status"] not in ("cancelled", "completed"), "Встреча уже закрыта", 409)
         if action == "confirm":
             require(
                 obj["data"]["current_proposal"] == d.get("proposal_id"),
@@ -544,4 +549,7 @@ def register_services(app):
             obj["revision"],
         )
         emit(g.db, obj["owner"], id, "booking." + action, g.now)
+        from .crm import sync_booking
+
+        sync_booking(g.db, result, g.now, g.actor["id"], "Решение клиента о времени")
         return result
