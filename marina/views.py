@@ -6,6 +6,13 @@ import copy
 def client_view(obj):
     obj = copy.deepcopy(obj)
     d, kind = obj["data"], obj["kind"]
+    if kind == "video_review":
+        from .crm import client_review
+
+        return client_review(obj)
+    if kind == "crm_message":
+        obj["data"] = {}
+        return obj
     if kind == "report":
         for key in ("revisions", "approved_revision", "approved_by", "approved_at"):
             d.pop(key, None)

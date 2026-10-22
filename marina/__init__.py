@@ -85,6 +85,7 @@ def protected(admin=False):
                         request.path.startswith("/api/" + prefix)
                         for prefix in (
                             "subjects",
+                            "video-reviews",
                             "attempts",
                             "bookings",
                             "quotes",
@@ -489,6 +490,9 @@ def create_app(config=None):
     from .services import register_services
 
     register_services(app)
+    from .crm import register_crm
+
+    register_crm(app)
     from .training import register_training
 
     register_training(app)

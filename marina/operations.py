@@ -42,6 +42,8 @@ def notify(app, owner, object_id, event):
         "case.submitted",
         "case.followup",
         "booking.requested",
+        "crm.video_received",
+        "crm.contact_due",
         "lesson.review_required",
     ):
         require(app.config["ADMIN_TELEGRAM_IDS"], "Укажите специалиста для уведомлений")
@@ -75,6 +77,17 @@ def notify(app, owner, object_id, event):
             },
         )
         return
+    if event == "crm.message":
+        from .crm import notify_crm
+
+        return notify_crm(app, owner, object_id, event)
+    if event.startswith("booking."):
+        with connect(app.config["DATABASE"]) as db:
+            booking = object_get(db, object_id, "booking", owner)
+        if booking["data"].get("review_id"):
+            from .crm import notify_crm
+
+            return notify_crm(app, owner, object_id, event)
     require(account, "Получатель не найден")
     telegram(
         app,
@@ -243,6 +256,10 @@ def work_once(app, send=None):
             state = (
                 "sent" if outcome == "sent" else "failed" if current["attempts"] >= 8 else "pending"
             )
+        if event["event"] == "crm.message":
+            from .crm import message_delivery
+
+            message_delivery(db, event, now, outcome == "sent")
         db.execute(
             "UPDATE outbox SET status=?,available=?,leased_until=NULL WHERE id=?",
             (state, now + min(3600, 2 ** current["attempts"] * 10), event["id"]),
@@ -253,6 +270,16 @@ def work_once(app, send=None):
 def tick(app):
     now = int(app.config["CLOCK"]())
     with transaction(app.config["DATABASE"]) as db:
+        for row in db.execute(
+            "SELECT * FROM objects WHERE kind='video_review' AND status NOT IN ('closed','completed') "
+            "AND json_extract(data,'$.next_contact')<=?",
+            (now,),
+        ).fetchall():
+            review = unpack(row)
+            marker = f"crm-contact:{review['id']}:{review['data']['next_contact']}"
+            if not db.execute("SELECT 1 FROM runtime WHERE key=?", (marker,)).fetchone():
+                emit(db, review["owner"], review["id"], "crm.contact_due", now)
+                db.execute("INSERT INTO runtime VALUES(?,?)", (marker, str(now)))
         for row in db.execute(
             "SELECT * FROM objects WHERE kind='case' AND status='answered' AND json_extract(data,'$.followup_until')<=?",
             (now,),
@@ -265,10 +292,11 @@ def tick(app):
             (now,),
         ).fetchall():
             media = unpack(row)
-            case = object_get(db, media["data"]["case_id"], "case")
+            parent = media["data"].get("review_id") or media["data"].get("case_id")
+            case = object_get(db, parent)
             marker = "retention:" + media["id"]
             if (
-                case["status"] == "closed"
+                case["status"] in ("closed", "completed")
                 and not db.execute("SELECT 1 FROM runtime WHERE key=?", (marker,)).fetchone()
             ):
                 insert(
@@ -357,12 +385,14 @@ def register_operations(app):
         rows = [
             unpack(r)
             for r in g.db.execute(
-                "SELECT * FROM objects WHERE kind IN ('report','case','booking','reconciliation','data_request','ai_job','refund','payment_event','retention_task') AND status NOT IN ('published','closed','completed','cancelled','resolved','processed','confirmed') ORDER BY created,id LIMIT 200"
+                "SELECT * FROM objects WHERE kind IN ('video_review','report','case','booking','reconciliation','data_request','ai_job','refund','payment_event','retention_task') AND status NOT IN ('published','closed','completed','cancelled','resolved','processed','confirmed') ORDER BY created,id LIMIT 200"
             )
         ]
         for obj in rows:
             due = (
-                obj["data"].get("followup", {}).get("due_at")
+                obj["data"].get("next_contact")
+                if obj["kind"] == "video_review"
+                else obj["data"].get("followup", {}).get("due_at")
                 if obj["status"] == "followup_pending"
                 else obj["data"].get("due_at")
             )

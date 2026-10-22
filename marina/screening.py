@@ -243,7 +243,7 @@ def register_screening(app):
             "items": [
                 history_view(unpack(r))
                 for r in g.db.execute(
-                    "SELECT * FROM objects WHERE owner=? AND kind IN ('attempt','order','quote','right','report','case','booking','lesson','payment_attempt','progress','plan') ORDER BY created DESC,id LIMIT 200",
+                    "SELECT * FROM objects WHERE owner=? AND kind IN ('video_review','attempt','order','quote','right','report','case','booking','lesson','payment_attempt','progress','plan') ORDER BY created DESC,id LIMIT 200",
                     (g.actor["id"],),
                 )
             ]
