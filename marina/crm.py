@@ -8,7 +8,7 @@ from flask import g, request
 
 from . import age_months, body, object_get, protected, reason, require
 from .commerce import policies
-from .db import audit, emit, insert, transaction, uid, unpack, update
+from .db import audit, connect, emit, insert, transaction, uid, unpack, update
 from .privacy import consent_required
 from .screening import idempotent
 
@@ -447,6 +447,84 @@ def message_delivery(db, event, now, delivered):
         "Telegram подтвердил отправку сообщения",
         obj["revision"],
     )
+
+
+def notify_review_video(app, owner, object_id):
+    """Deliver the private video to configured specialists, retrying each unsent part."""
+    from .bot import send_file
+    from .providers import telegram
+
+    path, now = app.config["DATABASE"], int(app.config["CLOCK"]())
+    with connect(path) as db:
+        review = object_get(db, object_id, "video_review", owner)
+        if review["status"] in ("closed", "completed"):
+            return
+        media = object_get(db, review["data"].get("video_id"), "media", owner)
+        if media["status"] != "ready":
+            return
+        blob = db.execute("SELECT body FROM blobs WHERE id=?", (media["id"],)).fetchone()
+        require(blob, "Видео недоступно")
+        recipients = []
+        for chat in sorted(app.config["ADMIN_TELEGRAM_IDS"]):
+            account = db.execute("SELECT * FROM accounts WHERE telegram_id=?", (chat,)).fetchone()
+            if account and (account["blocked"] or account["role"] != "admin"):
+                continue
+            if review["data"].get("assigned_to") and (
+                not account or account["id"] != review["data"]["assigned_to"]
+            ):
+                continue
+            recipients.append((chat, dict(account) if account else None))
+    require(recipients, "Укажите доступного специалиста для видео")
+    for chat, account in recipients:
+        prefix = f"crm-video-delivery:{object_id}:{chat}:"
+        for part in ("video", "notice"):
+            with connect(path) as db:
+                if db.execute("SELECT 1 FROM runtime WHERE key=?", (prefix + part,)).fetchone():
+                    continue
+            if part == "video":
+                send_file(app, chat, "client-video.mp4", blob["body"], "video/mp4", "sendVideo")
+            else:
+                data = review["data"]
+                text = (
+                    "Новое видео для первичного просмотра.\n\n"
+                    + "Проблема: "
+                    + data["problem"][:1000]
+                    + "\nЗадание: "
+                    + (data.get("activity") or {}).get("title", "")[:200]
+                    + "\nПояснение родителя: "
+                    + data.get("client_note", "")[:1000]
+                    + "\n\nID обращения: "
+                    + object_id
+                )
+                payload = {"chat_id": chat, "text": text}
+                if account:
+                    with transaction(path) as db:
+                        callback = insert(
+                            db,
+                            "bot_callback",
+                            {"action": "admin_card", "id": object_id},
+                            now,
+                            account["id"],
+                            status="active",
+                        )
+                    payload["reply_markup"] = {
+                        "inline_keyboard": [
+                            [{"text": "Открыть обращение", "callback_data": "b:" + callback["id"]}]
+                        ]
+                    }
+                else:
+                    payload["text"] += "\nОткройте /queue, чтобы ответить родителю."
+                telegram(app, "sendMessage", payload)
+            with transaction(path) as db:
+                db.execute("INSERT OR IGNORE INTO runtime VALUES(?,?)", (prefix + part, str(now)))
+                audit(
+                    db,
+                    "system",
+                    "crm.specialist-" + part + "-delivered",
+                    review,
+                    now,
+                    "Telegram подтвердил отправку специалисту " + str(chat),
+                )
 
 
 def notify_crm(app, owner, object_id, event):

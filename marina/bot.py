@@ -190,9 +190,12 @@ class Bot:
         if privacy["accepted"]:
             return True
         if not privacy["policy"]:
+            buttons = [("В меню", "menu", {})]
+            if next_action == "submit_review_video":
+                buttons.insert(0, ("Прислать видео специалисту", next_action, choice or {}))
             self.send(
                 "Специалист готовит условия обработки данных. Ввод данных пока закрыт.",
-                [("В меню", "menu", {})],
+                buttons,
             )
         else:
             self.send(

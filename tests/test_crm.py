@@ -1,6 +1,8 @@
 import io
 import subprocess
 
+import pytest
+
 from marina.operations import work_once
 from tests.test_identity import app, login
 from tests.test_screening import publish, subject
@@ -66,6 +68,83 @@ def make_video(tmp_path, codec="libx264"):
     return path.read_bytes()
 
 
+@pytest.mark.parametrize("assigned", [False, True])
+def test_specialist_video_retry_and_recipient_access(app, tmp_path, assigned):
+    app.config["ADMIN_TELEGRAM_IDS"] = {1, 4, 5}
+    admin, client, lead = setup_review(app)
+    second = login(app, 4).get("/api/me").json["account"]["id"]
+    blocked = login(app, 5).get("/api/me").json["account"]["id"]
+    admin.post("/api/admin/accounts/" + blocked + "/block", json={"reason": "Access revoked"})
+    if assigned:
+        assert (
+            admin.post(
+                "/api/admin/crm/" + lead["id"] + "/assign",
+                json={
+                    "revision": lead["revision"],
+                    "assigned_to": second,
+                    "reason": "Fixture assignment",
+                },
+            ).status_code
+            == 200
+        )
+    raw = make_video(tmp_path)
+    assert (
+        client.post(
+            "/api/video-reviews/" + lead["id"] + "/video",
+            data={"file": (io.BytesIO(raw), "review.mp4", "video/mp4")},
+        ).status_code
+        == 201
+    )
+    files, notices = [], []
+    app.config["FILE_TRANSPORT"] = lambda *args: files.append(args)
+
+    def deliver(method, url, data, headers):
+        if data["chat_id"] == 4:
+            raise RuntimeError("Temporary specialist notice failure")
+        notices.append(data)
+        return {"ok": True, "result": {}}
+
+    app.config["HTTP_TRANSPORT"] = deliver
+    work_once(app)
+    expected = [4] if assigned else [1, 4]
+    assert [f[0] for f in files] == expected
+    assert all(f[2] == raw for f in files)
+    app.clock[0] += 30
+    app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: notices.append(data) or {
+        "ok": True,
+        "result": {},
+    }
+    work_once(app)
+    assert [f[0] for f in files] == expected  # Confirmed uploads are not repeated on notice retry.
+    assert [n["chat_id"] for n in notices] == expected
+    button = notices[-1]["reply_markup"]["inline_keyboard"][0][0]
+    from marina.bot import handle_update
+
+    def click(uid):
+        handle_update(
+            app,
+            {
+                "update_id": 4000 + uid,
+                "callback_query": {
+                    "id": "staff-card",
+                    "from": {"id": uid},
+                    "data": button["callback_data"],
+                    "message": {"chat": {"id": uid, "type": "private"}},
+                },
+            },
+        )
+
+    click(2)
+    assert [f[0] for f in files] == expected
+    click(4)
+    assert files[-1][0] == 4 and lead["id"] in notices[-1]["text"]
+    assert any(
+        b["text"] == "Написать мини-заключение"
+        for row in notices[-1]["reply_markup"]["inline_keyboard"]
+        for b in row
+    )
+
+
 def test_real_video_to_specialist_and_diagnostic_booking(app, tmp_path):
     admin, client, public = setup_review(app)
     review_id = public["id"]
@@ -90,11 +169,18 @@ def test_real_video_to_specialist_and_diagnostic_booking(app, tmp_path):
     assert len(admin.get("/api/admin/crm").json["items"]) == 1
     assert any(o["id"] == review_id for o in admin.get("/api/admin/queue").json["items"])
     sent = []
+    files = []
+    app.config["FILE_TRANSPORT"] = lambda *args: files.append(args)
     app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: sent.append(data) or {
         "ok": True,
         "result": {},
     }
     work_once(app)  # Staff notification precedes the independently tested client send.
+    assert files == [(1, "client-video.mp4", raw, "video/mp4", "sendVideo")]
+    notice = sent[-1]
+    assert notice["chat_id"] == 1 and "Fixture task" in notice["text"]
+    review_button = notice["reply_markup"]["inline_keyboard"][0][0]
+    assert review_button["text"] == "Открыть обращение"
 
     def card():
         return admin.get("/api/admin/crm/" + review_id).json["object"]
