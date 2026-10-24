@@ -101,7 +101,11 @@ def protected(admin=False):
                 ):
                     from .privacy import consent_required
 
-                    consent_required(db, account["id"])
+                    consent_required(
+                        db,
+                        account["id"],
+                        allow_offer=g.app.config.get("DEV_OFFER_BYPASSES_CONSENT", False),
+                    )
                 result = fn(*args, **kwargs)
                 return result
 
@@ -128,6 +132,7 @@ def create_app(config=None):
         SESSION_TTL=12 * 3600,
         PUBLIC_URL=os.getenv("PUBLIC_URL", ""),
         TELEGRAM_WEBHOOK_SECRET=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
+        DEV_OFFER_BYPASSES_CONSENT=os.getenv("DEV_OFFER_BYPASSES_CONSENT") == "1",
         SALES_ENABLED=False,
     )
     if config:

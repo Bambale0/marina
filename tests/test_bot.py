@@ -104,7 +104,11 @@ def test_offer_document_is_complete_published_and_separate_from_consent(app):
             assert json.loads(acceptance["data"])["offer_id"] == offer["id"]
     assert messages[-1]["text"] == "Separate consent"
 
-    click(cancel, 8004)
+    app.config["DEV_OFFER_BYPASSES_CONSENT"] = True
+    click(accept, 8004)
+    assert "Теперь выберите профиль ребёнка" in messages[-1]["text"]
+
+    click(cancel, 8005)
     assert messages[-1]["text"].startswith("Нейроразвитие дома")
 
 
