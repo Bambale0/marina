@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from marina.bot import handle_update
@@ -75,8 +77,10 @@ def test_offer_document_is_complete_published_and_separate_from_consent(app):
 
     click(button, 8002)
     assert len(files) == 2 and files[-1][2] == text.encode("utf-8")
-    button = messages[-1]["reply_markup"]["inline_keyboard"][0][0]
-    assert button["text"] == "Продолжить"
+    keyboard = messages[-1]["reply_markup"]["inline_keyboard"]
+    accept, cancel = keyboard[0][0], keyboard[1][0]
+    assert accept["text"] == "✅ Принять оферту"
+    assert cancel["text"] == "❌ Отменить"
     publish(
         admin,
         "policy",
@@ -87,8 +91,21 @@ def test_offer_document_is_complete_published_and_separate_from_consent(app):
             "retention_days": 30,
         },
     )
-    click(button, 8003)
+    click(accept, 8003)
+    with app.app_context():
+        from marina.db import connect
+
+        with connect(app.config["DATABASE"]) as db:
+            acceptance = db.execute(
+                "SELECT status,data FROM objects WHERE kind='offer_acceptance' AND owner=?",
+                (bot.owner,),
+            ).fetchone()
+            assert acceptance["status"] == "recorded"
+            assert json.loads(acceptance["data"])["offer_id"] == offer["id"]
     assert messages[-1]["text"] == "Separate consent"
+
+    click(cancel, 8004)
+    assert messages[-1]["text"].startswith("Нейроразвитие дома")
 
 
 def test_polling_profile_and_private_identity(app):

@@ -29,6 +29,35 @@ def register_content(app):
         obj = unpack(row)
         return {"id": obj["id"], "title": obj["data"]["title"], "text": obj["data"]["text"]}
 
+    @app.post("/api/offer-acceptances")
+    @protected()
+    def accept_offer():
+        data = body()
+        row = g.db.execute(
+            "SELECT * FROM objects WHERE kind='template' AND status='published' "
+            "AND json_extract(data,'$.type')='offer' ORDER BY updated DESC,rowid DESC LIMIT 1"
+        ).fetchone()
+        require(row, "Оферта пока не опубликована", 404)
+        offer = unpack(row)
+        require(data.get("offer_id") == offer["id"], "Откройте актуальную редакцию оферты")
+
+        from .screening import idempotent
+
+        return idempotent(
+            g.db,
+            "offer-acceptance:" + g.actor["id"],
+            offer["id"],
+            {"offer_id": offer["id"]},
+            lambda: insert(
+                g.db,
+                "offer_acceptance",
+                {"offer_id": offer["id"], "accepted_at": g.now},
+                g.now,
+                g.actor["id"],
+                status="recorded",
+            ),
+        )
+
     @app.get("/api/admin/onboarding-defaults/<age_group>")
     @protected(admin=True)
     def onboarding_defaults(age_group):
