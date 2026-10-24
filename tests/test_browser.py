@@ -10,6 +10,9 @@ from tests.test_screening import publish
 
 
 def test_browser_admin_and_profile_forms(app, tmp_path):
+    from tests.funnel_fixtures import configure_funnel_source
+
+    configure_funnel_source(app, tmp_path)
     sync_api = pytest.importorskip("playwright.sync_api")
     a = login(app)
     p = publish(
@@ -113,6 +116,33 @@ def test_browser_admin_and_profile_forms(app, tmp_path):
             assert (
                 page.get_by_label("Что заметить", exact=True).first.input_value()
                 == "Наблюдайте за помощью взрослого."
+            )
+            page.get_by_role("button", name="Контент и настройки", exact=True).click()
+            page.get_by_label("Раздел", exact=True).select_option("funnel")
+            page.get_by_role("button", name="Создать черновик", exact=True).click()
+            page.get_by_label("Возрастная группа скрининга", exact=True).select_option("10-14")
+            page.get_by_role("button", name="Продолжить", exact=True).click()
+            page.get_by_label("Название", exact=True).wait_for()
+            assert (
+                page.get_by_label("Название", exact=True).input_value()
+                == "Нейро-скрининг: 10–14 лет"
+            )
+            assert (
+                page.get_by_label("Приветствие", exact=True)
+                .input_value()
+                .startswith("Здравствуйте")
+            )
+            assert (
+                page.get_by_label("Срок действия промокода, дней", exact=True).input_value() == "7"
+            )
+            page.get_by_label("Основание / причина действия", exact=True).fill(
+                "Review owner funnel"
+            )
+            page.get_by_role("button", name="Сохранить черновик", exact=True).click()
+            page.get_by_role("button", name="Подготовить PDF как черновик", exact=True).wait_for()
+            assert (
+                page.get_by_label("Имя PDF-файла", exact=True).input_value()
+                == "Dofaminovaya_Perezagruzka_10-14.pdf"
             )
             page.get_by_role("button", name="CRM", exact=True).click()
             page.get_by_role("heading", name="CRM", exact=True).wait_for()

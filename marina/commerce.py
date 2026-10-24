@@ -168,6 +168,17 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
                 published_revision=None,
             )
             obj = insert(db, "report", payload, now, order["owner"], line["subject_id"])
+        elif service == "guide":
+            from .funnel import guide_paid
+
+            payload.update(
+                service="guide",
+                material_id=d["material_id"],
+                asset_id=d["asset_id"],
+                run_id=d["run_id"],
+            )
+            obj = insert(db, "right", payload, now, order["owner"], status="active")
+            guide_paid(db, order, obj, now)
         elif service == "case":
             payload.update(
                 problem=d.get("problem", ""),
@@ -365,6 +376,10 @@ def register_commerce(app):
             ).fetchone()[0]
             require(count < ops["data"]["max_open_orders"], "Лимит заказов достигнут")
         product = p["data"]
+        if product["service"] == "guide":
+            from .funnel import guide_quote
+
+            return guide_quote(g.db, g.actor["id"], p, d, g.now), 201
         surface = d.get("surface")
         require(surface in ("telegram", "web"), "Укажите поверхность покупки")
         require(

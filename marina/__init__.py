@@ -81,6 +81,10 @@ def protected(admin=False):
                     g.app.config.get("ENFORCE_CONSENT", True)
                     and request.method not in ("GET", "HEAD")
                     and not request.path.startswith("/api/admin/")
+                    and not (
+                        request.path.startswith("/api/funnel-runs/")
+                        and request.path.endswith("/refuse")
+                    )
                     and any(
                         request.path.startswith("/api/" + prefix)
                         for prefix in (
@@ -91,6 +95,7 @@ def protected(admin=False):
                             "quotes",
                             "cases",
                             "lessons",
+                            "funnel-runs",
                         )
                     )
                 ):
@@ -113,6 +118,9 @@ def create_app(config=None):
     app = Flask(__name__, static_folder="static")
     app.config.update(
         DATABASE=os.getenv("DATABASE", "var/marina.sqlite"),
+        FUNNEL_SOURCE_PATH=os.getenv(
+            "FUNNEL_SOURCE_PATH", "/var/lib/marina/content/screening_scenario.json"
+        ),
         BOT_TOKEN=os.getenv("BOT_TOKEN", ""),
         ADMIN_TELEGRAM_IDS={int(v) for v in os.getenv("ADMIN_TELEGRAM_IDS", "").split(",") if v},
         CLOCK=time.time,
@@ -484,6 +492,9 @@ def create_app(config=None):
     from .screening import register_screening
 
     register_screening(app)
+    from .funnel import register_funnel
+
+    register_funnel(app)
     from .commerce import register_commerce
 
     register_commerce(app)
