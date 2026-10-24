@@ -327,10 +327,37 @@ class Bot:
                 offer["text"].encode("utf-8"),
                 "text/plain; charset=utf-8",
             )
-            buttons = MENU
-            if d.get("next_action"):
-                buttons = [("Продолжить", d["next_action"], d.get("choice") or {})]
+            buttons = [
+                (
+                    "✅ Принять оферту",
+                    "offer_accept",
+                    {
+                        "id": offer["id"],
+                        "next_action": d.get("next_action"),
+                        "choice": d.get("choice") or {},
+                    },
+                ),
+                ("❌ Отменить", "menu", {}),
+            ]
             self.send("Оферта — полный текст в файле выше. Вы можете сохранить его.", buttons)
+        elif action == "offer_accept":
+            self.api("/offer-acceptances", "POST", {"offer_id": d["id"]})
+            if d.get("next_action") in (
+                "choose_concern",
+                "continue_concern",
+                "custom_concern",
+                "observe_activity",
+                "submit_review_video",
+                "crm_booking",
+                "funnel_age",
+                "funnel_answer",
+                "funnel_book",
+                "funnel_buy",
+                "funnel_resume",
+            ):
+                self.action(d["next_action"], d["choice"])
+            else:
+                self.action("menu", {})
         elif action == "video_welcome":
             self.state_set(
                 step=None, onboarding=False, age_group=None, concern=None, onboarding_next=None
