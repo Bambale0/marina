@@ -6,6 +6,10 @@ import copy
 def client_view(obj):
     obj = copy.deepcopy(obj)
     d, kind = obj["data"], obj["kind"]
+    if kind == "funnel_run":
+        from .funnel import public_run
+
+        return public_run(obj)
     if kind == "video_review":
         from .crm import client_review
 

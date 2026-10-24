@@ -36,6 +36,15 @@ def verify_backup(path):
 def notify(app, owner, object_id, event):
     from .providers import telegram
 
+    if event.startswith("funnel."):
+        from .funnel import notify_funnel
+
+        return notify_funnel(app, owner, object_id, event)
+    if event == "purchase.fulfilled":
+        with connect(app.config["DATABASE"]) as db:
+            obj = object_get(db, object_id)
+        if obj["kind"] == "right" and obj["data"].get("service") == "guide":
+            return
     if event == "crm.video_received":
         from .crm import notify_review_video
 
@@ -88,7 +97,7 @@ def notify(app, owner, object_id, event):
     if event.startswith("booking."):
         with connect(app.config["DATABASE"]) as db:
             booking = object_get(db, object_id, "booking", owner)
-        if booking["data"].get("review_id"):
+        if booking["data"].get("review_id") or booking["data"].get("run_id"):
             from .crm import notify_crm
 
             return notify_crm(app, owner, object_id, event)
@@ -171,6 +180,13 @@ def work_once(app, send=None):
                 {**attempt["data"], **(result or {})},
                 "ready" if outcome == "sent" else "uncertain",
             )
+            if outcome == "sent":
+                order = object_get(db, attempt["data"]["order_id"], "order")
+                if order["data"].get("run_id"):
+                    from .funnel import schedule
+
+                    run = object_get(db, order["data"]["run_id"], "funnel_run")
+                    schedule(db, run, "funnel.invoice." + attempt["id"], now)
             state = "sent" if outcome == "sent" else "failed"
             if outcome == "failed":
                 insert(
