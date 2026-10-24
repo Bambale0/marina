@@ -4,7 +4,24 @@ from .commerce import policies
 from .db import audit, insert, unpack, update
 
 
-def consent_required(db, actor):
+def offer_accepted(db, actor):
+    offer = db.execute(
+        "SELECT id FROM objects WHERE kind='template' AND status='published' "
+        "AND json_extract(data,'$.type')='offer' ORDER BY updated DESC,rowid DESC LIMIT 1"
+    ).fetchone()
+    return bool(
+        offer
+        and db.execute(
+            "SELECT 1 FROM objects WHERE kind='offer_acceptance' AND owner=? "
+            "AND json_extract(data,'$.offer_id')=?",
+            (actor, offer["id"]),
+        ).fetchone()
+    )
+
+
+def consent_required(db, actor, allow_offer=False):
+    if allow_offer and offer_accepted(db, actor):
+        return
     p = policies(db, "privacy")
     require(
         p,

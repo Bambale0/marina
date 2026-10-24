@@ -36,6 +36,32 @@ def test_consent_is_specific_to_current_published_version(app):
     assert c.post("/api/subjects", json=payload).status_code == 422
 
 
+def test_dev_can_use_current_offer_acceptance_instead_of_privacy_consent(app):
+    app.config.update(ENFORCE_CONSENT=True, DEV_OFFER_BYPASSES_CONSENT=True)
+    admin, client = login(app), login(app, 2)
+    offer = publish(
+        admin,
+        "template",
+        {"type": "offer", "text": "Dev offer"},
+    )
+    payload = {"kind": "adult", "name": "Fixture", "birth_date": "1990-01-01"}
+
+    assert client.get("/api/offer").json["accepted"] is False
+    assert client.post("/api/subjects", json=payload).status_code == 422
+    assert client.post("/api/offer-acceptances", json={"offer_id": offer["id"]}).status_code == 200
+    assert client.get("/api/offer").json["accepted"] is True
+    assert client.post("/api/subjects", json=payload).status_code == 201
+
+    app.config["DEV_OFFER_BYPASSES_CONSENT"] = False
+    assert (
+        client.post(
+            "/api/subjects",
+            json={**payload, "name": "Production remains protected"},
+        ).status_code
+        == 422
+    )
+
+
 def test_session_expiry_logout_and_origin(app):
     c = login(app, 2)
     assert (

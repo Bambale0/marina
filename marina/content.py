@@ -27,7 +27,19 @@ def register_content(app):
         ).fetchone()
         require(row, "Оферта пока не опубликована", 404)
         obj = unpack(row)
-        return {"id": obj["id"], "title": obj["data"]["title"], "text": obj["data"]["text"]}
+        accepted = bool(
+            g.db.execute(
+                "SELECT 1 FROM objects WHERE kind='offer_acceptance' AND owner=? "
+                "AND json_extract(data,'$.offer_id')=?",
+                (g.actor["id"], obj["id"]),
+            ).fetchone()
+        )
+        return {
+            "id": obj["id"],
+            "title": obj["data"]["title"],
+            "text": obj["data"]["text"],
+            "accepted": accepted,
+        }
 
     @app.post("/api/offer-acceptances")
     @protected()

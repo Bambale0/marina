@@ -207,11 +207,15 @@ class Bot:
         privacy = self.api("/privacy")
         if privacy["accepted"]:
             return True
+        offer_response = self.client.get("/api/offer")
+        offer = offer_response.get_json() if offer_response.status_code == 200 else None
+        if self.app.config.get("DEV_OFFER_BYPASSES_CONSENT", False) and offer and offer["accepted"]:
+            return True
         if not privacy["policy"]:
             buttons = [("В меню", "menu", {})]
             if next_action == "submit_review_video":
                 buttons.insert(0, ("Прислать видео специалисту", next_action, choice or {}))
-            if self.client.get("/api/offer").status_code == 200:
+            if offer:
                 buttons.insert(
                     0, ("Оферта", "offer", {"next_action": next_action, "choice": choice})
                 )
