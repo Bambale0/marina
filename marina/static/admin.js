@@ -1,5 +1,35 @@
 "use strict";
 const labels = {
+  method: "Методика",
+  welcome_text: "Приветствие",
+  age_reminder_text: "Напоминание о выборе возраста",
+  offer_text: "Предложение руководства",
+  guide_title: "Название руководства",
+  guide_pages: "Страницы руководства",
+  guide_filename: "Имя PDF-файла",
+  guide_product_id: "ID опубликованного тарифа руководства",
+  free_material_id: "ID бесплатного PDF для зелёной зоны",
+  refusal_material_id: "ID бесплатного PDF или видео после отказа",
+  material_id: "ID опубликованного PDF-материала",
+  asset_id: "ID файла материала",
+  channel_url: "Ссылка на Telegram-канал",
+  contact_url: "Личная ссылка Telegram специалиста",
+  consultation_text: "Описание диагностики",
+  consultation_intro_text: "Описание диагностики до покупки / после истечения промокода",
+  consultation_valid_days: "Срок действия промокода, дней",
+  consultation_code: "Промокод",
+  consultation_amount_rub: "Цена диагностики по промокоду, ₽",
+  consultation_regular_rub: "Обычная цена диагностики, ₽",
+  success_text: "Сообщение после оплаты",
+  cart_first_text: "Напоминание через 30 минут",
+  cart_last_text: "Напоминание перед окончанием предложения",
+  refusal_text: "Сообщение после отказа",
+  followups: "Касания после выдачи руководства",
+  hours: "Через сколько часов",
+  price_rub: "Исходная цена из сценария, ₽ (справочно)",
+  buyer_tag: "Тег покупателя",
+  refused_tag: "Тег отказа",
+  zone: "Зона результата (green / yellow / red)",
   age_group: "Возрастная группа (3-4 / 5-6 / 7-8 / 9-10)",
   concerns: "Вопросы экрана знакомства",
   description: "Пояснение после выбора вопроса",
@@ -32,7 +62,7 @@ const labels = {
   max: "До",
   examples: "Контрольные примеры",
   answers: "Ответы: вопрос=вариант, по строке",
-  service: "Услуга (pdf / case / subscription / course / booking)",
+  service: "Услуга (guide / pdf / case / subscription / course / booking)",
   amount: "Цена: копейки RUB или целые Stars",
   currency: "Валюта (RUB / XTR)",
   period_hours: "Период доступа, часов",
@@ -96,6 +126,7 @@ const labels = {
   allow_external_ai: "Разрешена передача текста ИИ-провайдеру",
 };
 const templates = {
+  funnel: {},
   onboarding: { age_group: "3-4", concerns: [] },
   decision: { owner: "", status: "open", epics: [], evidence: "" },
   material: {
@@ -118,6 +149,8 @@ const templates = {
     examples: [],
   },
   product: {
+    material_id: "",
+    age_group: "",
     service: "pdf",
     amount: 0,
     currency: "XTR",
@@ -220,6 +253,8 @@ const itemTemplates = {
   },
   options: { id: "", text: "", score: 0 },
   bands: { min: 0, max: 0, text: "" },
+  guide_pages: { title: "", text: "" },
+  followups: { hours: 24, text: "" },
   examples: { answers: {}, score: 0, text: "" },
   modules: { id: "", title: "", lesson_ids: [], requires: [] },
   lessons: { id: "", title: "", text: "", requires: [], exercise_ids: [] },
@@ -232,7 +267,8 @@ function structuredEditor(data, context = "") {
     const value =
       name === "when" && !rawValue ? { question: "", answer: "" } : rawValue;
     if (["approval", "previous_version"].includes(name)) continue;
-    const title = context === "activities" && name === "title" ? "Название задания"
+    const title = context === "guide_pages" && name === "title" ? "Заголовок страницы"
+      : context === "activities" && name === "title" ? "Название задания"
       : context === "activities" && name === "instructions" ? "Инструкция задания"
       : labels[name] || name;
     if (
@@ -319,7 +355,7 @@ function structuredEditor(data, context = "") {
           ? "checkbox"
           : typeof value === "number"
             ? "number"
-            : [
+            : name.endsWith("_text") || [
                   "text",
                   "description",
                   "observation_focus",
@@ -397,6 +433,7 @@ async function adminContent() {
       search.node,
       button("Найти", load, true),
       button("Создать черновик", () => editContent(null, kind.get())),
+      button("Профиль Telegram", editFunnelProfile, true),
     ),
     list,
   );
@@ -405,6 +442,18 @@ async function adminContent() {
 async function editContent(obj, kind) {
   kind = obj?.kind || kind;
   let template = clone(templates[kind] || policyTemplates.commerce);
+  if (kind === "funnel" && !obj) {
+    const group = selectField("Возрастная группа скрининга", [
+      ["3-4", "3–4 года"], ["5-6", "5–6 лет"],
+      ["7-9", "7–9 лет"], ["10-14", "10–14 лет"],
+    ]);
+    modal(form("Сценарий из документа владельца", [group], "Продолжить", async () => {
+      const defaults = await api("/admin/funnel-defaults/" + group.get());
+      $("#dialog").close();
+      await contentForm(null, kind, defaults);
+    }));
+    return;
+  }
   if (kind === "onboarding" && !obj) {
     const group = selectField("Возрастная группа", [
       ["3-4", "3–4 года"], ["5-6", "5–6 лет"],
@@ -461,6 +510,20 @@ async function contentForm(obj, kind, template) {
   if (obj && obj.status !== "draft")
     f.querySelector("button[type=submit]").disabled = true;
   if (obj) {
+    if (kind === "funnel") {
+      f.append(button("Скачать PDF для проверки", async () => {
+        const url = await authenticatedFile("/admin/funnels/" + obj.id + "/guide-preview");
+        el("a", { href: url, download: obj.data.guide_filename }).click();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      }, true));
+      f.append(button("Подготовить PDF как черновик", async () => {
+        const material = await api("/admin/funnels/" + obj.id + "/prepare-guide", "POST", {
+          revision: obj.revision, reason: why.get(),
+        });
+        notice("PDF сохранён в материалах как черновик. Проверьте и утвердите его перед продажей.");
+        await editContent(material);
+      }, true));
+    }
     f.prepend(
       button(
         "Предпросмотр и проверка",
@@ -510,6 +573,13 @@ async function contentForm(obj, kind, template) {
       button("История изменений", () => auditPage(obj.id), true),
     );
     if (kind === "exercise" || kind === "material") {
+      if (kind === "material" && obj.data.asset_id) {
+        f.append(button("Скачать PDF материала", async () => {
+          const url = await authenticatedFile("/admin/materials/" + obj.id + "/pdf");
+          el("a", { href: url, download: "guide.pdf" }).click();
+          setTimeout(() => URL.revokeObjectURL(url), 30000);
+        }, true));
+      }
       const file = field("Видео MP4 / материал", "file");
       f.append(
         el(
@@ -540,6 +610,8 @@ async function contentForm(obj, kind, template) {
                   },
                 };
                 await editContent(updated);
+              } else if (kind === "material") {
+                await editContent({ ...obj, data: { ...obj.data, asset_id: asset.id } });
               }
             },
             true,
@@ -549,6 +621,18 @@ async function contentForm(obj, kind, template) {
     }
   }
   main(f);
+}
+
+async function editFunnelProfile() {
+  const current = await api("/admin/funnel-profile");
+  const name = field("Имя бота", "text", current.name);
+  const description = field("Описание до нажатия Старт", "textarea", current.description);
+  const why = field("Основание / причина действия", "textarea");
+  modal(form("Профиль Telegram", [name, description, why], "Применить в Telegram", async () => {
+    await api("/admin/funnel-profile", "POST", { name: name.get(), description: description.get(), reason: why.get() });
+    $("#dialog").close();
+    notice("Обновление профиля поставлено в очередь. Результат виден в истории операций.");
+  }));
 }
 async function adminQueue() {
   const data = await api("/admin/queue");
@@ -677,6 +761,11 @@ async function adminCard(id) {
     notice("Действие сохранено");
     await adminCard(id);
   };
+  if (o.kind === "funnel_run" || o.kind === "funnel_entry") {
+    actions.append(button("Остановить напоминания", () => command("/admin/" + (o.kind === "funnel_run" ? "funnel-runs/" : "funnel-entries/") + id + "/stop"), true));
+    if (o.data.booking_id)
+      actions.append(button("Заявка на диагностику", () => adminCard(o.data.booking_id), true));
+  }
   if (o.kind === "report") {
     const n = o.data.revisions?.length || 0;
     actions.append(

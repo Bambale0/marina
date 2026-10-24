@@ -3,6 +3,7 @@ from . import body, object_get, offset, protected, reason, require
 from .db import audit, insert, unpack, update
 
 KINDS = {
+    "funnel",
     "onboarding",
     "decision",
     "material",
@@ -233,6 +234,10 @@ def register_content(app):
                 file.mimetype in ("application/pdf", "text/plain", "video/mp4"),
                 "Разрешены PDF, текст и MP4",
             )
+            if file.mimetype == "video/mp4":
+                from .media import verify_video
+
+                verify_video(data)
         id = uid()
         g.db.execute(
             "INSERT INTO blobs VALUES(?,?,?,?,?,?,?,?)",
@@ -284,6 +289,10 @@ def register_content(app):
 
 def validate(obj):
     d = obj["data"]
+    if obj["kind"] == "funnel":
+        from .funnel import validate_funnel
+
+        validate_funnel(d)
     if obj["kind"] == "onboarding":
         from .onboarding import validate_screen
 
@@ -299,7 +308,7 @@ def validate(obj):
         validate_method(d)
     if obj["kind"] == "product":
         require(
-            d.get("service") in ("pdf", "case", "subscription", "course", "booking"),
+            d.get("service") in ("pdf", "case", "subscription", "course", "booking", "guide"),
             "Выберите услугу",
         )
         require(
@@ -315,6 +324,11 @@ def validate(obj):
                 "Укажите срок доступа",
             )
         require(d.get("launch_approved") is True, "Подтвердите выполнение условий запуска")
+        if d["service"] == "guide":
+            from .funnel import AGES, material_asset
+
+            require(d.get("age_group") in AGES, "Выберите возраст руководства")
+            material_asset(g.db, d.get("material_id"))
     if obj["kind"] == "product" and d.get("service") == "case":
         require(
             isinstance(d.get("case_questions"), list) and d["case_questions"],

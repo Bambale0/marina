@@ -111,7 +111,7 @@ def test_polling_profile_and_private_identity(app):
         )
 
     message(1, "/start")
-    assert "Привет" in sent[-1][1]["text"]
+    assert "Здравствуйте, Fixture" in sent[-1][1]["text"]
     from tests.test_screening import publish
     from tests.test_identity import login
 
@@ -215,14 +215,14 @@ def test_welcome_funnel_to_video_review(app, tmp_path, group, count):
         )
 
     def choose_task(number):
-        send("/start")
+        send("/video")
         click("пройти тесты")
         click(group)
         click("1")
         click("Продолжить")
         click("Вариант " + str(number))
 
-    send("/start")
+    send("/video")
     assert sent[-1]["text"].startswith("Привет")
     assert sent[-1]["reply_markup"]["inline_keyboard"][0][0]["style"] == "success"
     click("пройти тесты")
@@ -279,7 +279,7 @@ def test_welcome_funnel_to_video_review(app, tmp_path, group, count):
     send("/profiles")
     click("Child")
     assert sent[-1]["text"] == "Профиль выбран."
-    send("/start")
+    send("/video")
     click("пройти тесты")
     click(group)
     click("добавить свое")

@@ -14,6 +14,8 @@ from .onboarding import AGE_GROUPS, screen
 from .intro_activities import ACTIVITY_INTRO
 
 MENU = [
+    ("Пройти скрининг", "welcome", {}),
+    ("Задание с видео", "video_welcome", {}),
     ("Профили", "profiles", {}),
     ("Скрининги", "methods", {}),
     ("Занятия", "training", {}),
@@ -105,6 +107,10 @@ class Bot:
 
         with transaction(self.app.config["DATABASE"]) as db:
             for title, action, data in buttons:
+                if action == "url":
+                    flush_numbered()
+                    rows.append([{"text": title, "url": data["url"]}])
+                    continue
                 obj = insert(
                     db,
                     "bot_callback",
@@ -123,10 +129,21 @@ class Bot:
         return {"inline_keyboard": rows}
 
     def send(self, text, buttons=None):
-        data = {"chat_id": self.chat, "text": text[:4000]}
+        while len(text) > 3800:
+            split = text.rfind("\n", 0, 3800)
+            if split < 100:
+                split = 3800
+            telegram(self.app, "sendMessage", {"chat_id": self.chat, "text": text[:split]})
+            text = text[split:].lstrip("\n")
+        data = {"chat_id": self.chat, "text": text}
         if buttons:
             data["reply_markup"] = self.keyboard(buttons)
         telegram(self.app, "sendMessage", data)
+
+    def funnel_age_buttons(self, entry_id):
+        from .funnel_bot import age_buttons
+
+        return age_buttons(entry_id)
 
     def selected(self):
         me = self.api("/me")
@@ -297,6 +314,10 @@ class Bot:
         )
 
     def action(self, action, d):
+        from .funnel_bot import handle_action
+
+        if handle_action(self, action, d):
+            return
         if action == "offer":
             offer = self.api("/offer")
             send_file(
@@ -310,7 +331,7 @@ class Bot:
             if d.get("next_action"):
                 buttons = [("Продолжить", d["next_action"], d.get("choice") or {})]
             self.send("Оферта — полный текст в файле выше. Вы можете сохранить его.", buttons)
-        elif action == "welcome":
+        elif action == "video_welcome":
             self.state_set(
                 step=None, onboarding=False, age_group=None, concern=None, onboarding_next=None
             )
@@ -498,6 +519,11 @@ class Bot:
                 "observe_activity",
                 "submit_review_video",
                 "crm_booking",
+                "funnel_age",
+                "funnel_answer",
+                "funnel_book",
+                "funnel_buy",
+                "funnel_resume",
             ):
                 self.action(d["next_action"], d["choice"])
             else:
@@ -905,6 +931,10 @@ class Bot:
             if d.get("connection"):
                 text += "\nСсылка встречи: " + d["connection"]
             self.send(text, buttons)
+        elif kind == "right" and d.get("service") == "guide":
+            pdf = self.client.get("/api/guides/" + id + "/pdf")
+            require(pdf.status_code == 200, "Руководство недоступно")
+            send_file(self.app, self.chat, "guide.pdf", pdf.data, "application/pdf")
         elif kind == "report":
             if d.get("pdf_id"):
                 pdf = self.client.get("/api/reports/" + id + "/pdf")
@@ -1033,6 +1063,30 @@ class Bot:
             return self.action("offer", {})
         if text.startswith("/start"):
             return self.action("welcome", {})
+        if text == "/video":
+            return self.action("video_welcome", {})
+        if text in ("/continue", "/result"):
+            return self.action("funnel_resume", {})
+        if text == "/stop":
+            self.api("/funnel/stop", "POST", {})
+            self.state_set(step=None)
+            return self.send(
+                "Напоминания и предложения отключены. Результаты и оплаченные материалы сохранятся в чате."
+            )
+        if text == "/paysupport":
+            from .funnel import published
+
+            with connect(self.app.config["DATABASE"]) as db:
+                content = published(db)
+            if content and content["data"].get("contact_url"):
+                return self.send(
+                    "По вопросам оплаты напишите Марине. Укажите номер заказа из истории обращений.",
+                    [("💬 Поддержка по оплате", "url", {"url": content["data"]["contact_url"]})],
+                )
+            return self.send(
+                "По вопросам оплаты обратитесь к специалисту через меню «Консультация». Укажите номер заказа из истории обращений.",
+                [("Консультация", "booking", {}), ("Мои обращения", "history", {})],
+            )
         if text == "/menu":
             return self.action("menu", {})
         if text == "/id":
@@ -1068,6 +1122,14 @@ class Bot:
                 + code
             )
         step = self.state["data"].get("step")
+        if step == "funnel_booking":
+            self.api(
+                "/funnel-runs/" + self.state["data"]["funnel_run_id"] + "/book",
+                "POST",
+                {"preferences": text},
+            )
+            self.state_set(step=None)
+            return self.send("Заявка на диагностику передана. Специалист предложит время.", MENU)
         if step == "review_video":
             attachment = message.get("video") or message.get("document")
             require(

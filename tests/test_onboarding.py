@@ -46,13 +46,13 @@ def test_age_screen_uses_published_admin_copy_and_keeps_old_buttons(app):
         )
 
     def open_screen():
-        message("/start")
+        message("/video")
         click("пройти тесты")
         click("3–4 года")
 
     # Every numbered callback must open its own age-specific explanation.
     for group, (label, _, _) in AGE_GROUPS.items():
-        message("/start")
+        message("/video")
         click("пройти тесты")
         click(label)
         for i, concern in enumerate(default_concerns(group), 1):
