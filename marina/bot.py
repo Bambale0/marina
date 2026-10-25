@@ -120,7 +120,7 @@ class Bot:
                     status="active",
                 )
                 button = {"text": title, "callback_data": "b:" + obj["id"]}
-                if action == "choose_concern":
+                if action in ("choose_concern", "funnel_answer"):
                     numbered.append(button)
                 else:
                     flush_numbered()
