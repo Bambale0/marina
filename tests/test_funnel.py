@@ -39,6 +39,64 @@ def finish(client, run, values):
     return run
 
 
+def test_result_waits_30_seconds_and_edits_one_progress_message(app):
+    admin, owner = login(app), login(app, 2)
+    scenario(admin)
+    calls = []
+
+    def transport(method, url, data, headers):
+        telegram_method = url.rsplit("/", 1)[-1]
+        calls.append((telegram_method, data))
+        return {"ok": True, "result": {"message_id": 77}}
+
+    app.config["HTTP_TRANSPORT"] = transport
+    run = finish(owner, start(owner), ["b"] * 6)
+    completed_at = run["data"]["completed_at"]
+    with connect(app.config["DATABASE"]) as db:
+        events = db.execute(
+            "SELECT event,available FROM outbox WHERE object_id=? ORDER BY available,event",
+            (run["id"],),
+        ).fetchall()
+    assert [(row["event"], row["available"] - completed_at) for row in events] == [
+        ("funnel.progress.0", 0),
+        ("funnel.progress.1", 5),
+        ("funnel.progress.2", 10),
+        ("funnel.progress.3", 15),
+        ("funnel.progress.4", 20),
+        ("funnel.progress.5", 25),
+        ("funnel.result", 30),
+    ]
+
+    drain(app)
+    assert calls == [
+        (
+            "sendMessage",
+            {
+                "chat_id": 2,
+                "text": "Обрабатываю ваши ответы и готовлю результат…\n\n░░░░░░░░░░ 0%",
+            },
+        )
+    ]
+    visible = owner.get("/api/funnel-runs/" + run["id"]).json
+    assert "progress_message_id" not in visible["data"]
+    assert "progress_percent" not in visible["data"]
+    for percent in (20, 40, 60, 80, 100):
+        app.clock[0] += 5
+        drain(app)
+        assert calls[-1][0] == "editMessageText"
+        assert calls[-1][1]["message_id"] == 77
+        assert calls[-1][1]["text"].endswith(f"{percent}%")
+    app.clock[0] += 4
+    drain(app)
+    assert not any("ИТОГ СКРИНИНГА" in call[1].get("text", "") for call in calls)
+    app.clock[0] += 1
+    drain(app)
+    assert calls[-1][0] == "editMessageText"
+    assert calls[-1][1]["message_id"] == 77
+    assert "ИТОГ СКРИНИНГА" in calls[-1][1]["text"]
+    assert len([call for call in calls if call[0] == "sendMessage"]) == 1
+
+
 @pytest.mark.parametrize("group", ["3-4", "5-6", "7-9", "10-14"])
 @pytest.mark.parametrize(
     "values,total,zone",
@@ -98,7 +156,7 @@ def capture(app):
             "ok": True,
             "result": "https://t.me/$synthetic-invoice"
             if url.endswith("/createInvoiceLink")
-            else {},
+            else {"message_id": len(sent)},
         }
 
     app.config["HTTP_TRANSPORT"] = transport
@@ -123,7 +181,8 @@ def setup_sale(app, group="3-4"):
     )
     sent, files = capture(app)
     run = finish(owner, start(owner, group), ["b"] * 6)
-    app.clock[0] += 3
+    drain(app)
+    app.clock[0] += 30
     drain(app)
     assert "ИТОГ СКРИНИНГА" in sent[-1][1]["text"]
     app.clock[0] += 2
@@ -279,8 +338,9 @@ def test_telegram_start_age_six_answers_and_result(app, group):
             "В",
         ]
         click("Б")
+    drain(app)
     assert "Обрабатываю" in sent[-1][1]["text"]
-    app.clock[0] += 3
+    app.clock[0] += 30
     tick(app)
     drain(app)
     assert "6 из 12" in sent[-1][1]["text"]
@@ -528,12 +588,14 @@ def test_green_free_pdf_and_red_consultation_have_no_paid_gate(app):
     scenario(admin, free_material_id=material["id"])
     sent, files = capture(app)
     green = finish(owner, start(owner), ["a"] * 6)
-    app.clock[0] += 3
+    drain(app)
+    app.clock[0] += 30
     drain(app)
     assert "Игры по возрасту" in str(sent[-1])
     assert owner.get(f"/api/funnel-runs/{green['id']}/free-pdf").data.startswith(b"%PDF")
     red = finish(owner, start(owner, key="red"), ["c"] * 6)
-    app.clock[0] += 3
+    drain(app)
+    app.clock[0] += 30
     drain(app)
     assert "О диагностике" in str(sent[-1])
     assert owner.get(f"/api/funnel-runs/{red['id']}/free-pdf").status_code == 403
