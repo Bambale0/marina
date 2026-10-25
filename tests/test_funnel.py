@@ -332,11 +332,9 @@ def test_telegram_start_age_six_answers_and_result(app, group):
     click("Прочитал(а) и принимаю")
     for number in range(1, 7):
         assert f"[Вопрос {number} из 6]" in sent[-1][1]["text"]
-        assert [r[0]["text"] for r in sent[-1][1]["reply_markup"]["inline_keyboard"]] == [
-            "А",
-            "Б",
-            "В",
-        ]
+        rows = sent[-1][1]["reply_markup"]["inline_keyboard"]
+        assert len(rows) == 1
+        assert [button["text"] for button in rows[0]] == ["А", "Б", "В"]
         click("Б")
     drain(app)
     assert "Обрабатываю" in sent[-1][1]["text"]
