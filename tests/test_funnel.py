@@ -73,7 +73,7 @@ def test_result_waits_30_seconds_and_edits_one_progress_message(app):
             "sendMessage",
             {
                 "chat_id": 2,
-                "text": "Обрабатываю ваши ответы и готовлю результат…\n\n░░░░░░░░░░ 0%",
+                "text": "Обрабатываю ваши ответы и готовлю результат…\n\n⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0%",
             },
         )
     ]
@@ -85,7 +85,9 @@ def test_result_waits_30_seconds_and_edits_one_progress_message(app):
         drain(app)
         assert calls[-1][0] == "editMessageText"
         assert calls[-1][1]["message_id"] == 77
-        assert calls[-1][1]["text"].endswith(f"{percent}%")
+        assert calls[-1][1]["text"].endswith(
+            "🟩" * (percent // 10) + "⬜" * (10 - percent // 10) + f" {percent}%"
+        )
     app.clock[0] += 4
     drain(app)
     assert not any("ИТОГ СКРИНИНГА" in call[1].get("text", "") for call in calls)
