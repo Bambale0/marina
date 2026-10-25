@@ -43,6 +43,18 @@ PROFILE = {
     "Узнайте причины сложностей с поведением, вниманием и речью вашего ребенка.\n"
     "Нажмите кнопку «СТАРТ» внизу ⬇️",
 }
+RESULT_WAIT_SECONDS = 30
+PROGRESS_STEPS = (0, 20, 40, 60, 80, 100)
+
+
+def progress_text(percent):
+    filled = percent // 10
+    return (
+        "Обрабатываю ваши ответы и готовлю результат…\n\n"
+        + "▓" * filled
+        + "░" * (10 - filled)
+        + f" {percent}%"
+    )
 
 
 def defaults(group):
@@ -194,6 +206,8 @@ def public_run(obj):
     d = obj["data"]
     snapshot = d.pop("snapshot", {})
     d.pop("approval", None)
+    d.pop("progress_message_id", None)
+    d.pop("progress_percent", None)
     if obj["status"] == "in_progress" and snapshot:
         index = len(d["answers"])
         q = copy.deepcopy(snapshot["method"]["questions"][index])
@@ -534,7 +548,9 @@ def register_funnel(app):
             obj["revision"] - 1,
         )
         if status == "completed":
-            schedule(g.db, obj, "funnel.result", g.now + 3)
+            for step in range(len(PROGRESS_STEPS)):
+                schedule(g.db, obj, f"funnel.progress.{step}", g.now + step * 5)
+            schedule(g.db, obj, "funnel.result", g.now + RESULT_WAIT_SECONDS)
         return public_run(obj)
 
     @app.post("/api/funnel-runs/<id>/refuse")
@@ -987,12 +1003,39 @@ def notify_funnel(app, owner, id, event):
         consult.append(("💬 Написать Марине", "url", {"url": snapshot["contact_url"]}))
     if event == "funnel.age":
         bot.send(render_copy(text, {}, account["name"]), bot.funnel_age_buttons(id))
+    elif event.startswith("funnel.progress."):
+        if d.get("result_sent_at"):
+            return
+        step = int(event.rsplit(".", 1)[-1])
+        require(0 <= step < len(PROGRESS_STEPS), "Некорректный шаг обработки")
+        message_id = d.get("progress_message_id")
+        if message_id:
+            bot.edit(message_id, progress_text(PROGRESS_STEPS[step]))
+        else:
+            message = bot.send(progress_text(PROGRESS_STEPS[step]))
+            message_id = message.get("message_id") if isinstance(message, dict) else None
+            require(isinstance(message_id, int), "Telegram не вернул идентификатор сообщения")
+        with transaction(app.config["DATABASE"]) as db:
+            current = object_get(db, id)
+            update(
+                db,
+                current,
+                now,
+                {
+                    **current["data"],
+                    "progress_message_id": message_id,
+                    "progress_percent": PROGRESS_STEPS[step],
+                },
+            )
     elif event == "funnel.result":
         text = d["result"]["text"] + "\n\n" + d["result"]["limitations"]
         buttons = list(consult)
         if d["result"]["zone"] == "green" and snapshot.get("free_material_id"):
             buttons.insert(0, ("🎁 Игры по возрасту — PDF", "funnel_free", values))
-        bot.send(text, buttons)
+        if d.get("progress_message_id"):
+            bot.edit(d["progress_message_id"], text, buttons)
+        else:
+            bot.send(text, buttons)
         with transaction(app.config["DATABASE"]) as db:
             current = object_get(db, id)
             update(db, current, now, {**current["data"], "result_sent_at": now})

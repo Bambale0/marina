@@ -14,7 +14,6 @@ def age_buttons(entry_id):
 
 def show_question(bot, run):
     if run["status"] == "completed":
-        bot.send("Обрабатываю ваши ответы и готовлю результат… ⏳")
         return
     require(run["status"] == "in_progress", "Этот тест закрыт. Начните заново: /start")
     q = run["data"]["question"]

@@ -129,16 +129,23 @@ class Bot:
         return {"inline_keyboard": rows}
 
     def send(self, text, buttons=None):
+        result = None
         while len(text) > 3800:
             split = text.rfind("\n", 0, 3800)
             if split < 100:
                 split = 3800
-            telegram(self.app, "sendMessage", {"chat_id": self.chat, "text": text[:split]})
+            result = telegram(self.app, "sendMessage", {"chat_id": self.chat, "text": text[:split]})
             text = text[split:].lstrip("\n")
         data = {"chat_id": self.chat, "text": text}
         if buttons:
             data["reply_markup"] = self.keyboard(buttons)
-        telegram(self.app, "sendMessage", data)
+        return telegram(self.app, "sendMessage", data) or result
+
+    def edit(self, message_id, text, buttons=None):
+        data = {"chat_id": self.chat, "message_id": message_id, "text": text}
+        if buttons:
+            data["reply_markup"] = self.keyboard(buttons)
+        return telegram(self.app, "editMessageText", data)
 
     def funnel_age_buttons(self, entry_id):
         from .funnel_bot import age_buttons
