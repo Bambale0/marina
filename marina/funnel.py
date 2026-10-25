@@ -51,8 +51,8 @@ def progress_text(percent):
     filled = percent // 10
     return (
         "Обрабатываю ваши ответы и готовлю результат…\n\n"
-        + "▓" * filled
-        + "░" * (10 - filled)
+        + "🟩" * filled
+        + "⬜" * (10 - filled)
         + f" {percent}%"
     )
 
