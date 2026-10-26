@@ -57,6 +57,28 @@ def progress_text(percent):
     )
 
 
+def price_text(product):
+    amount = product["data"]["amount"]
+    currency = product["data"]["currency"]
+    if currency == "XTR":
+        return str(amount) + " ⭐"
+    require(currency == "RUB", "Валюта тарифа не поддерживается")
+    return f"{amount // 100},{amount % 100:02d} ₽"
+
+
+def lava_guide_ready(app, product):
+    data = product["data"]
+    return bool(
+        app.config.get("DEV_EXTERNAL_LAVA_CHECKOUT", False)
+        and data.get("currency") == "RUB"
+        and data.get("web_sales_approved") is True
+        and data.get("lava_offer_id")
+        and app.config.get("LAVA_API_KEY")
+        and app.config.get("LAVA_WEBHOOK_SECRET")
+        and str(app.config.get("PUBLIC_URL", "")).startswith("https://")
+    )
+
+
 def defaults(group):
     require(group in AGES, "Выберите возраст: 3–4, 5–6, 7–9 или 10–14 лет")
     try:
@@ -279,7 +301,7 @@ def guide_paid(db, order, right, now):
     schedule(db, run, "funnel.guide", now)
 
 
-def guide_quote(db, actor, p, d, now):
+def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     """Use the existing quote/order/receipt pipeline for an age-only guide purchase."""
     from .commerce import policies
 
@@ -301,9 +323,15 @@ def guide_quote(db, actor, p, d, now):
     )
     surface = d.get("surface")
     require(surface in ("telegram", "web"), "Укажите поверхность покупки")
+    external_lava = (
+        surface == "telegram"
+        and p["data"]["currency"] == "RUB"
+        and allow_external_lava
+        and p["data"].get("web_sales_approved") is True
+    )
     require(
-        surface != "telegram" or p["data"]["currency"] == "XTR",
-        "Цифровые покупки в Telegram доступны через Stars",
+        surface != "telegram" or p["data"]["currency"] == "XTR" or external_lava,
+        "Внешняя оплата цифрового материала для этой среды не разрешена",
     )
     require(
         surface != "web" or p["data"].get("web_sales_approved") is True,
@@ -383,6 +411,27 @@ def render_guide(d):
         for line in text.splitlines():
             story.extend((Paragraph(escape(line) or " ", style), Spacer(1, 4)))
     SimpleDocTemplate(target, title=d["guide_title"], author="Савельева Марина").build(story)
+    return target.getvalue()
+
+
+def render_text_material(d):
+    """Render administrator-supplied copy without inventing product content."""
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+    if "Marina" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(
+            TTFont("Marina", str(Path(__file__).parent / "assets/DejaVuSans.ttf"))
+        )
+    target = io.BytesIO()
+    style = ParagraphStyle("material", fontName="Marina", fontSize=11, leading=16)
+    heading = ParagraphStyle("material-heading", parent=style, fontSize=17, leading=22)
+    story = [Paragraph(escape(d["title"]), heading), Spacer(1, 16)]
+    for line in d["text"].splitlines() or [""]:
+        story.extend((Paragraph(escape(line) or " ", style), Spacer(1, 6)))
+    SimpleDocTemplate(target, title=d["title"], author="Савельева Марина").build(story)
     return target.getvalue()
 
 
@@ -680,7 +729,12 @@ def register_funnel(app):
                 return order
         product = object_get(g.db, obj["data"]["snapshot"].get("guide_product_id"), "product")
         quote = guide_quote(
-            g.db, g.actor["id"], product, {"run_id": id, "surface": "telegram"}, g.now
+            g.db,
+            g.actor["id"],
+            product,
+            {"run_id": id, "surface": "telegram"},
+            g.now,
+            allow_external_lava=lava_guide_ready(app, product),
         )
         order = insert(
             g.db,
@@ -798,6 +852,155 @@ def register_funnel(app):
         ).fetchone()
         require(row, "PDF не прикреплён", 404)
         return Response(row["body"], mimetype="application/pdf")
+
+    @app.post("/api/admin/materials/<id>/render-pdf")
+    @protected(admin=True)
+    def render_material_pdf(id):
+        obj = object_get(g.db, id, "material")
+        d = body()
+        why = reason(d)
+        require(obj["status"] == "draft", "PDF формируется только для черновика")
+        require(obj["revision"] == d.get("revision"), "Материал изменён", 409)
+        text = obj["data"].get("text")
+        filename = obj["data"].get("filename")
+        require(isinstance(text, str) and 1 <= len(text) <= 50000, "Введите текст PDF")
+        require(
+            isinstance(filename, str) and re.fullmatch(r"[A-Za-z0-9_-]+\.pdf", filename),
+            "Укажите имя PDF латиницей",
+        )
+        pdf = render_text_material(obj["data"])
+        from .content import material_source_digest
+
+        asset_id = uid()
+        g.db.execute(
+            "INSERT INTO blobs VALUES(?,?,?,?,?,?,?,?)",
+            (
+                asset_id,
+                g.actor["id"],
+                "",
+                obj["id"],
+                "application/pdf",
+                hashlib.sha256(pdf).hexdigest(),
+                pdf,
+                g.now,
+            ),
+        )
+        result = update(
+            g.db,
+            obj,
+            g.now,
+            {
+                **obj["data"],
+                "asset_id": asset_id,
+                "format": "pdf",
+                "render_source_sha256": material_source_digest(obj["data"]),
+            },
+        )
+        audit(
+            g.db,
+            g.actor["id"],
+            "material.render_pdf",
+            result,
+            g.now,
+            why,
+            obj["revision"],
+        )
+        return result
+
+    @app.get("/api/admin/tripwire")
+    @protected(admin=True)
+    def tripwire_admin():
+        entity_kinds = (
+            "funnel",
+            "material",
+            "product",
+            "policy",
+            "funnel_run",
+            "purchase_intent",
+            "quote",
+            "order",
+            "payment_attempt",
+            "payment_event",
+            "right",
+            "reconciliation",
+        )
+        entities = {kind: {} for kind in entity_kinds}
+        for row in g.db.execute(
+            "SELECT kind,status,count(*) AS count FROM objects WHERE kind IN ("
+            + ",".join("?" for _ in entity_kinds)
+            + ") GROUP BY kind,status",
+            entity_kinds,
+        ):
+            entities[row["kind"]][row["status"]] = row["count"]
+
+        groups = []
+        for group, label in AGES.items():
+            funnel = published(g.db, group)
+            product = None
+            material = None
+            if funnel and funnel["data"].get("guide_product_id"):
+                row = g.db.execute(
+                    "SELECT * FROM objects WHERE id=? AND kind='product'",
+                    (funnel["data"]["guide_product_id"],),
+                ).fetchone()
+                product = unpack(row)
+            if product and product["data"].get("material_id"):
+                row = g.db.execute(
+                    "SELECT * FROM objects WHERE id=? AND kind='material'",
+                    (product["data"]["material_id"],),
+                ).fetchone()
+                material = unpack(row)
+            groups.append(
+                {
+                    "age_group": group,
+                    "label": label,
+                    "funnel": (
+                        {
+                            "id": funnel["id"],
+                            "status": funnel["status"],
+                            "revision": funnel["revision"],
+                            "contact_configured": bool(funnel["data"].get("contact_url")),
+                        }
+                        if funnel
+                        else None
+                    ),
+                    "product": (
+                        {
+                            "id": product["id"],
+                            "status": product["status"],
+                            "revision": product["revision"],
+                            "amount": product["data"].get("amount"),
+                            "currency": product["data"].get("currency"),
+                            "lava_offer_configured": bool(product["data"].get("lava_offer_id")),
+                            "web_sales_approved": product["data"].get("web_sales_approved") is True,
+                        }
+                        if product
+                        else None
+                    ),
+                    "material": (
+                        {
+                            "id": material["id"],
+                            "status": material["status"],
+                            "revision": material["revision"],
+                            "asset_configured": bool(material["data"].get("asset_id")),
+                        }
+                        if material
+                        else None
+                    ),
+                }
+            )
+        return {
+            "integrations": {
+                "lava_api": bool(app.config.get("LAVA_API_KEY")),
+                "lava_webhook": bool(app.config.get("LAVA_WEBHOOK_SECRET")),
+                "public_https": str(app.config.get("PUBLIC_URL", "")).startswith("https://"),
+                "external_lava_test_mode": bool(
+                    app.config.get("DEV_EXTERNAL_LAVA_CHECKOUT", False)
+                ),
+            },
+            "groups": groups,
+            "entities": entities,
+        }
 
     @app.get("/api/admin/funnel-profile")
     @protected(admin=True)
@@ -958,9 +1161,12 @@ def notify_funnel(app, owner, id, event):
             if not snapshot.get("guide_product_id"):
                 return
             product = object_get(db, snapshot["guide_product_id"], "product")
-            if product["status"] != "published" or product["data"]["currency"] != "XTR":
+            external_lava = lava_guide_ready(app, product)
+            if product["status"] != "published" or not (
+                product["data"].get("currency") == "XTR" or external_lava
+            ):
                 return
-            price = str(product["data"]["amount"]) + " ⭐"
+            price = price_text(product)
             if event != "funnel.offer" and now >= d.get("offer_expires", 0):
                 return
             if event.startswith("funnel.cart"):
@@ -1122,7 +1328,12 @@ def notify_funnel(app, owner, id, event):
             "sendVideo" if video else "sendDocument",
         )
     elif event.startswith("funnel.invoice."):
+        lava_checkout = attempt["data"]["provider"] == "lava"
         bot.send(
-            "Счёт готов. Оплатите в Telegram Stars:",
+            (
+                "Счёт готов. Оплатите на защищённой странице Lava.top:"
+                if lava_checkout
+                else "Счёт готов. Оплатите в Telegram Stars:"
+            ),
             [("💳 Оплатить", "url", {"url": attempt["data"]["url"]})],
         )

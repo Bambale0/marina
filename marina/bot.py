@@ -1160,6 +1160,17 @@ class Bot:
                 + code
             )
         step = self.state["data"].get("step")
+        if step == "funnel_checkout_email":
+            attempt = self.api(
+                "/orders/" + self.state["data"]["funnel_order_id"] + "/checkout",
+                "POST",
+                {"email": text.strip()},
+            )
+            self.state_set(step=None, funnel_order_id=None)
+            from .funnel_bot import show_checkout
+
+            show_checkout(self, attempt)
+            return
         if step == "funnel_booking":
             self.api(
                 "/funnel-runs/" + self.state["data"]["funnel_run_id"] + "/book",

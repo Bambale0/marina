@@ -38,6 +38,21 @@ def show_question(bot, run):
     )
 
 
+def show_checkout(bot, attempt):
+    if attempt["status"] != "ready":
+        bot.send("Готовлю счёт. Ссылка появится в этом чате.")
+        return
+    lava_checkout = attempt["data"]["provider"] == "lava"
+    bot.send(
+        (
+            "Счёт готов. Оплатите на защищённой странице Lava.top:"
+            if lava_checkout
+            else "Счёт готов. Оплатите в Telegram Stars:"
+        ),
+        [("💳 Оплатить", "url", {"url": attempt["data"]["url"]})],
+    )
+
+
 def handle_action(bot, action, d):
     if action == "welcome":
         bot.state_set(
@@ -124,14 +139,16 @@ def handle_action(bot, action, d):
         if order["status"] == "paid":
             bot.send("Руководство оплачено. Файл будет доставлен в этот чат.")
             return True
-        attempt = bot.api("/orders/" + order["id"] + "/checkout", "POST", {})
-        if attempt["status"] == "ready":
-            bot.send(
-                "Счёт готов. Оплатите в Telegram Stars:",
-                [("💳 Оплатить", "url", {"url": attempt["data"]["url"]})],
+        if order["data"]["provider"] == "lava":
+            bot.state_set(
+                step="funnel_checkout_email", funnel_order_id=order["id"], funnel_run_id=d["id"]
             )
-        else:
-            bot.send("Готовлю счёт. Ссылка появится в этом чате.")
+            bot.send(
+                "Укажите email для электронного чека Lava.top. Он используется только для оформления платежа."
+            )
+            return True
+        attempt = bot.api("/orders/" + order["id"] + "/checkout", "POST", {})
+        show_checkout(bot, attempt)
     elif action == "funnel_free":
         from .bot import send_file
 
