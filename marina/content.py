@@ -240,6 +240,26 @@ def register_content(app):
                         previous["revision"],
                     )
                 previous_id = previous["data"].get("previous_version")
+            if obj["kind"] == "policy":
+                for row in g.db.execute(
+                    "SELECT * FROM objects WHERE kind='policy' AND status='published' AND id!=?",
+                    (obj["id"],),
+                ):
+                    previous = unpack(row)
+                    if previous["data"].get("type") != payload.get("type") or previous["data"].get(
+                        "scope"
+                    ) != payload.get("scope"):
+                        continue
+                    archived = update(g.db, previous, g.now, status="archived")
+                    audit(
+                        g.db,
+                        g.actor["id"],
+                        "content.superseded",
+                        archived,
+                        g.now,
+                        why,
+                        previous["revision"],
+                    )
             result = update(g.db, obj, g.now, status="published")
         elif action == "delete":
             require(

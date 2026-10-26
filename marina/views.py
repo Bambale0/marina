@@ -27,6 +27,10 @@ def client_view(obj):
     for key in ("product_snapshot", "method_snapshot"):
         if isinstance(d.get(key), dict):
             d[key].pop("approval", None)
+    if isinstance(d.get("offer_snapshot"), dict):
+        d["offer_snapshot"] = {
+            key: d["offer_snapshot"][key] for key in ("title", "text") if key in d["offer_snapshot"]
+        }
     return obj
 
 
