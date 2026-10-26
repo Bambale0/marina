@@ -240,6 +240,26 @@ def register_content(app):
                         previous["revision"],
                     )
                 previous_id = previous["data"].get("previous_version")
+            if obj["kind"] == "policy":
+                for row in g.db.execute(
+                    "SELECT * FROM objects WHERE kind='policy' AND status='published' AND id!=?",
+                    (obj["id"],),
+                ):
+                    previous = unpack(row)
+                    if previous["data"].get("type") != payload.get("type") or previous["data"].get(
+                        "scope"
+                    ) != payload.get("scope"):
+                        continue
+                    archived = update(g.db, previous, g.now, status="archived")
+                    audit(
+                        g.db,
+                        g.actor["id"],
+                        "content.superseded",
+                        archived,
+                        g.now,
+                        why,
+                        previous["revision"],
+                    )
             result = update(g.db, obj, g.now, status="published")
         elif action == "delete":
             require(
@@ -422,8 +442,23 @@ def validate(obj):
             d.get("type") in ("commerce", "operations", "privacy", "training", "ai"),
             "Укажите тип правил",
         )
-        require(d.get("terms"), "Укажите условия и основание решения")
+        guide_commerce = d.get("type") == "commerce" and d.get("scope") == "guide"
+        require(d.get("terms") or guide_commerce, "Укажите условия и основание решения")
         if d["type"] == "commerce":
+            if guide_commerce:
+                offer = g.db.execute(
+                    "SELECT 1 FROM objects WHERE id=? AND kind='template' AND status='published' "
+                    "AND json_extract(data,'$.type')='offer'",
+                    (d.get("offer_template_id"),),
+                ).fetchone()
+                require(offer, "Выберите опубликованную оферту")
+                require(
+                    type(d.get("quote_ttl_seconds")) is int
+                    and d["quote_ttl_seconds"] > 0
+                    and d.get("late_payment") == "review",
+                    "Укажите срок расчёта и порядок поздней оплаты",
+                )
+                return
             require(
                 d.get("family_at") == "quote"
                 and type(d.get("include_future")) is bool

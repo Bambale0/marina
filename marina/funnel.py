@@ -339,8 +339,17 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     )
     ops = policies(db, "operations")
     require(not ops or not ops["data"].get("pause_sales"), "Приём новых заказов приостановлен")
-    policy = policies(db, "commerce")
+    policy = policies(db, "commerce", "guide")
     require(policy, "Сначала утвердите правила покупки в админке")
+    offer_row = db.execute(
+        "SELECT * FROM objects WHERE kind='template' AND status='published' "
+        "AND json_extract(data,'$.type')='offer' ORDER BY updated DESC,rowid DESC LIMIT 1"
+    ).fetchone()
+    offer = unpack(offer_row) if offer_row else None
+    require(
+        offer and offer["id"] == policy["data"].get("offer_template_id"),
+        "Привяжите правила покупки к текущей опубликованной оферте",
+    )
     material, asset = material_asset(db, p["data"].get("material_id"))
     intent = idempotent(
         db,
@@ -370,6 +379,8 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
         "product_snapshot": p["data"],
         "policy_id": policy["id"],
         "policy_snapshot": policy["data"],
+        "offer_id": offer["id"],
+        "offer_snapshot": offer["data"],
         "family": [],
         "run_id": run["id"],
         "material_id": material["id"],
@@ -968,6 +979,8 @@ def register_funnel(app):
     @app.get("/api/admin/tripwire")
     @protected(admin=True)
     def tripwire_admin():
+        from .commerce import policies
+
         entity_kinds = (
             "funnel",
             "material",
@@ -1047,6 +1060,12 @@ def register_funnel(app):
                     ),
                 }
             )
+        offer_row = g.db.execute(
+            "SELECT * FROM objects WHERE kind='template' AND status='published' "
+            "AND json_extract(data,'$.type')='offer' ORDER BY updated DESC,rowid DESC LIMIT 1"
+        ).fetchone()
+        offer = unpack(offer_row) if offer_row else None
+        guide_policy = policies(g.db, "commerce", "guide")
         return {
             "integrations": {
                 "lava_api": bool(app.config.get("LAVA_API_KEY")),
@@ -1059,6 +1078,31 @@ def register_funnel(app):
                     app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
                 ),
             },
+            "offer": (
+                {
+                    "id": offer["id"],
+                    "status": offer["status"],
+                    "revision": offer["revision"],
+                    "title": offer["data"].get("title"),
+                }
+                if offer
+                else None
+            ),
+            "policy": (
+                {
+                    "id": guide_policy["id"],
+                    "status": guide_policy["status"],
+                    "revision": guide_policy["revision"],
+                    "title": guide_policy["data"].get("title"),
+                    "offer_template_id": guide_policy["data"].get("offer_template_id"),
+                    "offer_current": bool(
+                        offer and offer["id"] == guide_policy["data"].get("offer_template_id")
+                    ),
+                    "quote_ttl_seconds": guide_policy["data"].get("quote_ttl_seconds"),
+                }
+                if guide_policy
+                else None
+            ),
             "groups": groups,
             "entities": entities,
         }

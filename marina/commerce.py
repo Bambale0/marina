@@ -9,14 +9,20 @@ from .db import audit, connect, emit, insert, transaction, uid, unpack, update
 from .screening import idempotent
 
 
-def policies(db, type):
+def policies(db, type, scope=None):
     rows = db.execute(
         "SELECT * FROM objects WHERE kind='policy' AND status='published' ORDER BY created DESC,rowid DESC"
     )
-    return next(
-        (unpack(r) for r in rows if __import__("json").loads(r["data"]).get("type") == type),
-        None,
-    )
+    for row in rows:
+        data = __import__("json").loads(row["data"])
+        if data.get("type") != type:
+            continue
+        if scope is None and data.get("scope"):
+            continue
+        if scope is not None and data.get("scope") != scope:
+            continue
+        return unpack(row)
+    return None
 
 
 def rights(db, owner, subject=None):

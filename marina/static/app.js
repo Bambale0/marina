@@ -271,6 +271,13 @@ async function refresh() {
     ),
   );
 }
+async function initialPage() {
+  if (location.pathname === "/admin" && me.account.role === "admin") {
+    current = "tripwire";
+    return adminTripwire();
+  }
+  return home();
+}
 async function home() {
   const s = me.subjects.find((s) => s.id === selected);
   main(
@@ -1104,7 +1111,7 @@ safe(async () => {
   }
   if (token) {
     await refresh();
-    await home();
+    await initialPage();
   }
 });
 if (!token) {
@@ -1118,7 +1125,7 @@ if (!token) {
         token = auth.token;
         sessionStorage.setItem("marina-token", token);
         await refresh();
-        await home();
+        await initialPage();
       }),
     ),
   );
