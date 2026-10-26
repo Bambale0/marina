@@ -178,26 +178,128 @@ def test_polling_profile_and_private_identity(app):
     message(5, "1990-01-01")
     assert "Профиль создан" in sent[-1][1]["text"]
     message(6, "/login")
-    code = sent[-1][1]["text"].split("\n")[-1]
-    c = app.test_client()
-    assert c.post("/api/auth/code", json={"code": code}).status_code == 200
-    assert c.post("/api/auth/code", json={"code": code}).status_code == 401
+    assert sent[-1][1]["text"] == "Недостаточно прав"
     message(7, "/admin")
     assert sent[-1][1]["text"] == "Недостаточно прав"
-    app.config["PUBLIC_URL"] = "https://dev.example.test"
     message(8, "/admin", user=1)
-    assert "кабинет" in sent[-1][1]["text"].lower()
-    assert sent[-1][1]["reply_markup"]["inline_keyboard"] == [
-        [
-            {
-                "text": "Открыть админку",
-                "web_app": {"url": "https://dev.example.test/admin"},
-                "style": "success",
-            }
-        ]
+    assert "админка" in sent[-1][1]["text"].lower()
+    buttons = [row[0] for row in sent[-1][1]["reply_markup"]["inline_keyboard"]]
+    assert [button["text"] for button in buttons] == [
+        "Трипваер",
+        "Контент и настройки",
+        "Все сущности",
+        "Очередь",
+        "Операции и интеграции",
+        "Журнал аудита",
     ]
+    assert all("callback_data" in button and "web_app" not in button for button in buttons)
+    message(81, "/login", user=1)
+    assert sent[-1][1]["text"] == "Mini App не используется. Управление доступно прямо в Telegram."
+    assert "callback_data" in sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]
     message(9, "/queue", user=1)
     assert sent[-1][1]["text"] == "Очередь пуста."
+
+
+def test_telegram_admin_creates_approves_lists_and_audits_content(app):
+    from tests.test_identity import login
+
+    sent, files = [], []
+    app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: sent.append(data) or {
+        "ok": True,
+        "result": {},
+    }
+    app.config["FILE_TRANSPORT"] = lambda *args: files.append(args)
+
+    counter = iter(range(9000, 9100))
+
+    def message(text):
+        handle_update(
+            app,
+            {
+                "update_id": next(counter),
+                "message": {
+                    "from": {"id": 1, "first_name": "Admin"},
+                    "chat": {"id": 1, "type": "private"},
+                    "text": text,
+                },
+            },
+        )
+
+    def button(title):
+        for row in sent[-1]["reply_markup"]["inline_keyboard"]:
+            for value in row:
+                if value["text"] == title:
+                    return value
+        raise AssertionError("button not found: " + title)
+
+    def click(value):
+        handle_update(
+            app,
+            {
+                "update_id": next(counter),
+                "callback_query": {
+                    "id": "admin-callback",
+                    "from": {"id": 1, "first_name": "Admin"},
+                    "data": value["callback_data"],
+                    "message": {"chat": {"id": 1, "type": "private"}},
+                },
+            },
+        )
+
+    message("/admin")
+    click(button("Трипваер"))
+    assert "Трипваер" in sent[-1]["text"]
+    assert "3–4 года: неполный комплект" in sent[-1]["text"]
+    click(button("В админку"))
+    click(button("Контент и настройки"))
+    click(button("Решения"))
+    click(button("Создать"))
+    message(
+        json.dumps(
+            {
+                "title": "Управляемое решение",
+                "data": {"owner": "specialist", "status": "open", "epics": ["E02"]},
+            },
+            ensure_ascii=False,
+        )
+    )
+    assert "причину" in sent[-1]["text"].lower()
+    message("Добавление решения для ручного теста")
+    assert "Управляемое решение" in sent[-1]["text"]
+    click(button("Скачать JSON"))
+    assert files and files[-1][1].startswith("decision-")
+    exported = json.loads(files[-1][2])
+    assert exported["title"] == "Управляемое решение"
+    click(button("Изменить JSON"))
+    message(
+        json.dumps(
+            {
+                "title": "Управляемое решение 2",
+                "data": {"owner": "specialist", "status": "checked", "epics": ["E02"]},
+            },
+            ensure_ascii=False,
+        )
+    )
+    message("Уточнение редакции перед проверкой")
+    assert "Управляемое решение 2" in sent[-1]["text"]
+    click(button("Утвердить"))
+    assert "причину" in sent[-1]["text"].lower()
+    message("Проверена специалистом перед публикацией")
+    assert "Статус: approved" in sent[-1]["text"]
+
+    admin = login(app)
+    decisions = admin.get("/api/admin/content?kind=decision&order=desc").json["items"]
+    assert decisions[0]["data"]["title"] == "Управляемое решение 2"
+    assert decisions[0]["status"] == "approved"
+    audit = admin.get("/api/admin/audit?order=desc").json["items"]
+    assert audit[0]["reason"] == "Проверена специалистом перед публикацией"
+
+    message("/admin")
+    click(button("Все сущности"))
+    assert "Решения: 1" in sent[-1]["text"]
+    click(button("В админку"))
+    click(button("Журнал аудита"))
+    assert "Проверена специалистом перед публикацией" in sent[-1]["text"]
 
 
 @pytest.mark.parametrize(

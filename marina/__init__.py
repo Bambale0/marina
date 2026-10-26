@@ -487,8 +487,11 @@ def create_app(config=None):
     @protected(admin=True)
     def audit_list():
         id = request.args.get("object_id")
+        order = "DESC" if request.args.get("order") == "desc" else "ASC"
         rows = g.db.execute(
-            "SELECT * FROM audit WHERE (? IS NULL OR object_id=?) ORDER BY id LIMIT 100 OFFSET ?",
+            "SELECT * FROM audit WHERE (? IS NULL OR object_id=?) ORDER BY id "
+            + order
+            + " LIMIT 100 OFFSET ?",
             (id, id, offset()),
         )
         return {"items": [dict(r) for r in rows]}
