@@ -499,8 +499,13 @@ async function adminTripwire() {
           badge(data.policy.status),
           el(
             "p",
-            { class: "quiet" },
-            "Срок расчёта: " + data.policy.quote_ttl_seconds + " сек.",
+            { class: data.policy.offer_current ? "quiet" : "overdue" },
+            (data.policy.offer_current
+              ? "Связана с текущей офертой"
+              : "Требуется новая редакция со ссылкой на текущую оферту") +
+              " · срок расчёта: " +
+              data.policy.quote_ttl_seconds +
+              " сек.",
           ),
           button("Открыть правила", () => openContent(data.policy.id), true),
         )

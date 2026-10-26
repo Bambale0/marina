@@ -341,6 +341,15 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     require(not ops or not ops["data"].get("pause_sales"), "Приём новых заказов приостановлен")
     policy = policies(db, "commerce", "guide")
     require(policy, "Сначала утвердите правила покупки в админке")
+    offer_row = db.execute(
+        "SELECT * FROM objects WHERE kind='template' AND status='published' "
+        "AND json_extract(data,'$.type')='offer' ORDER BY updated DESC,rowid DESC LIMIT 1"
+    ).fetchone()
+    offer = unpack(offer_row) if offer_row else None
+    require(
+        offer and offer["id"] == policy["data"].get("offer_template_id"),
+        "Привяжите правила покупки к текущей опубликованной оферте",
+    )
     material, asset = material_asset(db, p["data"].get("material_id"))
     intent = idempotent(
         db,
@@ -370,6 +379,8 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
         "product_snapshot": p["data"],
         "policy_id": policy["id"],
         "policy_snapshot": policy["data"],
+        "offer_id": offer["id"],
+        "offer_snapshot": offer["data"],
         "family": [],
         "run_id": run["id"],
         "material_id": material["id"],
@@ -1084,6 +1095,9 @@ def register_funnel(app):
                     "revision": guide_policy["revision"],
                     "title": guide_policy["data"].get("title"),
                     "offer_template_id": guide_policy["data"].get("offer_template_id"),
+                    "offer_current": bool(
+                        offer and offer["id"] == guide_policy["data"].get("offer_template_id")
+                    ),
                     "quote_ttl_seconds": guide_policy["data"].get("quote_ttl_seconds"),
                 }
                 if guide_policy

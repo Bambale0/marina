@@ -707,7 +707,28 @@ def test_admin_manages_offer_and_guide_purchase_policy_without_subscription_rule
     )
     assert quote.status_code == 200, quote.json
     assert quote.json["data"]["policy_id"] == guide_policy["id"]
+    assert quote.json["data"]["offer_id"] == offer["id"]
+    assert quote.json["data"]["offer_snapshot"]["text"] == "Published owner-supplied offer"
     assert quote.json["data"]["total"] == 49000
+
+    replacement = publish(
+        admin,
+        "template",
+        {"type": "offer", "text": "Replacement owner-supplied offer"},
+    )
+    second_run = finish(owner, start(owner, key="replacement-offer"), ["b"] * 6)
+    drain(app)
+    app.clock[0] += 32
+    drain(app)
+    app.clock[0] += 2
+    drain(app)
+    blocked = owner.post(
+        f"/api/funnel-runs/{second_run['id']}/purchase",
+        json={"surface": "telegram"},
+    )
+    assert blocked.status_code == 422
+    assert "текущей опубликованной оферте" in blocked.json["error"]
+    assert replacement["id"] != offer["id"]
 
 
 def test_consent_unpublished_copy_and_version_snapshots(app):
