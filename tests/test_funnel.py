@@ -226,6 +226,13 @@ def test_dev_tripwire_without_price_can_be_accepted_and_delivers_pdf(app):
     drain(app)
     assert len(files) == 1 and files[0][2].startswith(b"%PDF")
     assert "Оплата не выполнялась" in sent[-1][1]["text"]
+    consultation = owner.get(f"/api/funnel-runs/{run['id']}/consultation").json["text"]
+    assert "TEST_PROMO" not in consultation
+    booking = owner.post(
+        f"/api/funnel-runs/{run['id']}/book", json={"preferences": "Завтра, 18:00 МСК"}
+    )
+    assert booking.status_code == 200, booking.json
+    assert booking.json["data"]["promotion"]["eligible"] is False
     assert (
         owner.post(f"/api/funnel-runs/{run['id']}/dev-tripwire-accept", json={}).status_code == 200
     )

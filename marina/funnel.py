@@ -674,6 +674,7 @@ def register_funnel(app):
                     "regular_amount_rub": obj["data"]["snapshot"]["consultation_regular_rub"],
                     "eligible": bool(
                         obj["data"].get("guide_delivered_at")
+                        and not obj["data"].get("dev_tripwire_accepted_at")
                         and obj["data"].get("consultation_expires", 0) > g.now
                     ),
                     "expires": obj["data"].get("consultation_expires"),
@@ -708,7 +709,11 @@ def register_funnel(app):
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(obj["status"] == "completed", "Сначала завершите скрининг")
         data = obj["data"]
-        eligible = data.get("guide_delivered_at") and data.get("consultation_expires", 0) > g.now
+        eligible = (
+            data.get("guide_delivered_at")
+            and not data.get("dev_tripwire_accepted_at")
+            and data.get("consultation_expires", 0) > g.now
+        )
         key = "consultation_text" if eligible else "consultation_intro_text"
         return {"text": render_copy(data["snapshot"][key], data["snapshot"], g.actor["name"])}
 
