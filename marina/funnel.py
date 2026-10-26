@@ -731,6 +731,10 @@ def register_funnel(app):
             obj["status"] == "completed" and data.get("result", {}).get("zone") == "yellow",
             "Тестовый трипваер недоступен для этого результата",
         )
+        require(
+            not data.get("snapshot", {}).get("guide_product_id"),
+            "Для опубликованного продукта требуется оплата",
+        )
         if data.get("dev_tripwire_accepted_at"):
             return public_run(obj)
         require(

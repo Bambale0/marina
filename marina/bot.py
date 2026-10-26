@@ -364,6 +364,7 @@ class Bot:
                 "funnel_answer",
                 "funnel_book",
                 "funnel_buy",
+                "funnel_accept_dev",
                 "funnel_resume",
             ):
                 self.action(d["next_action"], d["choice"])
@@ -561,6 +562,7 @@ class Bot:
                 "funnel_answer",
                 "funnel_book",
                 "funnel_buy",
+                "funnel_accept_dev",
                 "funnel_resume",
             ):
                 self.action(d["next_action"], d["choice"])
