@@ -92,6 +92,8 @@ const labels = {
   question: "ID предыдущего вопроса",
   answer: "ID варианта, при котором показывается вопрос",
   type: "Тип правил",
+  scope: "Область правил",
+  offer_template_id: "ID опубликованной оферты",
   family_at: "Дата расчёта семьи (quote)",
   include_future: "Учитывать оплаченные будущие периоды",
   rank: "Порядок семьи (first_paid_then_created)",
@@ -204,6 +206,13 @@ const templates = {
   template: { type: "report", text: "", source: "" },
 };
 const policyTemplates = {
+  guide: {
+    type: "commerce",
+    scope: "guide",
+    offer_template_id: "",
+    quote_ttl_seconds: 0,
+    late_payment: "review",
+  },
   commerce: {
     type: "commerce",
     terms: "",
@@ -460,6 +469,56 @@ async function adminTripwire() {
     ),
   );
   const openContent = async (id) => editContent(await api("/admin/content/" + id));
+  const legal = el(
+    "section",
+    { class: "card" },
+    el("h2", {}, "Оферта и правила разовой покупки"),
+    data.offer
+      ? el(
+          "div",
+          {},
+          el("h3", {}, data.offer.title || "Оферта"),
+          badge(data.offer.status),
+          button("Открыть оферту", () => openContent(data.offer.id), true),
+        )
+      : el(
+          "div",
+          {},
+          el("p", { class: "overdue" }, "Опубликованная оферта отсутствует"),
+          button(
+            "Создать оферту",
+            () => contentForm(null, "template", { type: "offer", text: "", source: "" }),
+            true,
+          ),
+        ),
+    data.policy
+      ? el(
+          "div",
+          { class: "spacer" },
+          el("h3", {}, data.policy.title || "Правила покупки PDF"),
+          badge(data.policy.status),
+          el(
+            "p",
+            { class: "quiet" },
+            "Срок расчёта: " + data.policy.quote_ttl_seconds + " сек.",
+          ),
+          button("Открыть правила", () => openContent(data.policy.id), true),
+        )
+      : el(
+          "div",
+          { class: "spacer" },
+          el("p", { class: "overdue" }, "Правила разовой покупки PDF не опубликованы"),
+          button(
+            "Создать правила покупки PDF",
+            () =>
+              contentForm(null, "policy", {
+                ...clone(policyTemplates.guide),
+                offer_template_id: data.offer?.id || "",
+              }),
+            true,
+          ),
+        ),
+  );
   const groups = data.groups.map((group) => {
     const funnel = group.funnel,
       product = group.product,
@@ -530,6 +589,7 @@ async function adminTripwire() {
         "Внешняя оплата и проход без цены разрешаются только на dev для ручного теста. Проход без оплаты не создаёт заказ или право. Секреты хранятся в окружении и здесь не отображаются.",
       ),
     ),
+    legal,
     el(
       "div",
       { class: "row toolbar" },
@@ -576,7 +636,10 @@ async function editContent(obj, kind) {
   if (kind === "policy" && !obj) {
     const type = selectField(
       "Тип правил",
-      Object.keys(policyTemplates).map((k) => [k, k]),
+      Object.keys(policyTemplates).map((k) => [
+        k,
+        k === "guide" ? "Разовая покупка PDF" : k,
+      ]),
     );
     modal(
       form("Выберите тип правил", [type], "Продолжить", async () => {

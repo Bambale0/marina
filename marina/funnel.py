@@ -339,7 +339,7 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     )
     ops = policies(db, "operations")
     require(not ops or not ops["data"].get("pause_sales"), "Приём новых заказов приостановлен")
-    policy = policies(db, "commerce")
+    policy = policies(db, "commerce", "guide") or policies(db, "commerce")
     require(policy, "Сначала утвердите правила покупки в админке")
     material, asset = material_asset(db, p["data"].get("material_id"))
     intent = idempotent(
@@ -968,6 +968,8 @@ def register_funnel(app):
     @app.get("/api/admin/tripwire")
     @protected(admin=True)
     def tripwire_admin():
+        from .commerce import policies
+
         entity_kinds = (
             "funnel",
             "material",
@@ -1047,6 +1049,12 @@ def register_funnel(app):
                     ),
                 }
             )
+        offer_row = g.db.execute(
+            "SELECT * FROM objects WHERE kind='template' AND status='published' "
+            "AND json_extract(data,'$.type')='offer' ORDER BY updated DESC,rowid DESC LIMIT 1"
+        ).fetchone()
+        offer = unpack(offer_row) if offer_row else None
+        guide_policy = policies(g.db, "commerce", "guide")
         return {
             "integrations": {
                 "lava_api": bool(app.config.get("LAVA_API_KEY")),
@@ -1059,6 +1067,28 @@ def register_funnel(app):
                     app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
                 ),
             },
+            "offer": (
+                {
+                    "id": offer["id"],
+                    "status": offer["status"],
+                    "revision": offer["revision"],
+                    "title": offer["data"].get("title"),
+                }
+                if offer
+                else None
+            ),
+            "policy": (
+                {
+                    "id": guide_policy["id"],
+                    "status": guide_policy["status"],
+                    "revision": guide_policy["revision"],
+                    "title": guide_policy["data"].get("title"),
+                    "offer_template_id": guide_policy["data"].get("offer_template_id"),
+                    "quote_ttl_seconds": guide_policy["data"].get("quote_ttl_seconds"),
+                }
+                if guide_policy
+                else None
+            ),
             "groups": groups,
             "entities": entities,
         }

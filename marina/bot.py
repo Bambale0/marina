@@ -111,6 +111,10 @@ class Bot:
                     flush_numbered()
                     rows.append([{"text": title, "url": data["url"]}])
                     continue
+                if action == "web_app":
+                    flush_numbered()
+                    rows.append([{"text": title, "web_app": {"url": data["url"]}}])
+                    continue
                 obj = insert(
                     db,
                     "bot_callback",
@@ -1131,7 +1135,19 @@ class Bot:
             return self.action("menu", {})
         if text == "/id":
             return self.send("Ваш Telegram ID: " + str(self.user["id"]))
-        if text in ("/admin", "/queue"):
+        if text == "/admin":
+            require(
+                self.user["id"] in self.app.config["ADMIN_TELEGRAM_IDS"],
+                "Недостаточно прав",
+                403,
+            )
+            public_url = str(self.app.config.get("PUBLIC_URL", "")).rstrip("/")
+            require(public_url.startswith("https://"), "Публичный адрес админки не настроен")
+            return self.send(
+                "Административный кабинет: сущности, контент, тарифы, интеграции и аудит.",
+                [("Открыть админку", "web_app", {"url": public_url + "/admin"})],
+            )
+        if text == "/queue":
             return self.action("queue", {})
         if text == "/materials":
             items = self.api("/admin/content?kind=material")["items"]

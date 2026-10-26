@@ -633,6 +633,69 @@ def test_admin_renders_text_material_and_lists_tripwire_entities(app):
     assert dashboard.json["entities"]["material"]["draft"] == 1
 
 
+def test_admin_manages_offer_and_guide_purchase_policy_without_subscription_rules(app):
+    admin = login(app)
+    offer = publish(
+        admin,
+        "template",
+        {"type": "offer", "text": "Published owner-supplied offer"},
+    )
+    guide_policy = publish(
+        admin,
+        "policy",
+        {
+            "type": "commerce",
+            "scope": "guide",
+            "offer_template_id": offer["id"],
+            "quote_ttl_seconds": 7200,
+            "late_payment": "review",
+        },
+    )
+    dashboard = admin.get("/api/admin/tripwire")
+    assert dashboard.status_code == 200, dashboard.json
+    assert dashboard.json["offer"]["id"] == offer["id"]
+    assert dashboard.json["policy"]["id"] == guide_policy["id"]
+
+    owner = login(app, 2)
+    policy(admin)
+    base = scenario(admin)
+    material = approve_existing(
+        admin,
+        admin.post(
+            f"/api/admin/funnels/{base['id']}/prepare-guide",
+            json={"revision": base["revision"], "reason": "Prepare guide policy test"},
+        ).json,
+    )
+    guide = product(
+        admin,
+        "guide",
+        amount=49000,
+        currency="XTR",
+        material_id=material["id"],
+        age_group="3-4",
+    )
+    scenario(
+        admin,
+        guide_product_id=guide["id"],
+        contact_url="https://t.me/synthetic_fixture",
+    )
+    capture(app)
+    run = finish(owner, start(owner), ["b"] * 6)
+    drain(app)
+    app.clock[0] += 32
+    drain(app)
+    app.clock[0] += 2
+    drain(app)
+    run = owner.get("/api/funnel-runs/" + run["id"]).json
+    quote = owner.post(
+        f"/api/funnel-runs/{run['id']}/purchase",
+        json={"surface": "telegram"},
+    )
+    assert quote.status_code == 200, quote.json
+    assert quote.json["data"]["policy_id"] == guide_policy["id"]
+    assert quote.json["data"]["total"] == 49000
+
+
 def test_consent_unpublished_copy_and_version_snapshots(app):
     admin, owner = login(app), login(app, 2)
     assert owner.get("/api/admin/funnel-defaults/3-4").status_code == 403

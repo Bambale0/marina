@@ -183,7 +183,21 @@ def test_polling_profile_and_private_identity(app):
     assert c.post("/api/auth/code", json={"code": code}).status_code == 200
     assert c.post("/api/auth/code", json={"code": code}).status_code == 401
     message(7, "/admin")
-    assert "права" in sent[-1][1]["text"]
+    assert sent[-1][1]["text"] == "Недостаточно прав"
+    app.config["PUBLIC_URL"] = "https://dev.example.test"
+    message(8, "/admin", user=1)
+    assert "кабинет" in sent[-1][1]["text"].lower()
+    assert sent[-1][1]["reply_markup"]["inline_keyboard"] == [
+        [
+            {
+                "text": "Открыть админку",
+                "web_app": {"url": "https://dev.example.test/admin"},
+                "style": "success",
+            }
+        ]
+    ]
+    message(9, "/queue", user=1)
+    assert sent[-1][1]["text"] == "Очередь пуста."
 
 
 @pytest.mark.parametrize(

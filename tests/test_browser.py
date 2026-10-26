@@ -62,9 +62,13 @@ def test_browser_admin_and_profile_forms(app, tmp_path):
             errors = []
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.route("https://telegram.org/**", lambda route: route.abort())
-            page.goto("http://127.0.0.1:" + str(server.server_port))
+            page.goto("http://127.0.0.1:" + str(server.server_port) + "/admin")
             page.get_by_label("Одноразовый код из команды /login в боте").fill(code)
             page.get_by_role("button", name="Войти", exact=True).click()
+            page.get_by_role("heading", name="Трипваер", exact=True).wait_for()
+            page.get_by_role(
+                "heading", name="Оферта и правила разовой покупки", exact=True
+            ).wait_for()
             page.get_by_role("button", name="Профили", exact=True).click()
             page.get_by_label("Имя", exact=True).fill("Adult fixture")
             page.get_by_label("Дата рождения", exact=True).fill("1990-01-01")
@@ -174,6 +178,9 @@ def test_browser_admin_and_profile_forms(app, tmp_path):
             page.get_by_role("button", name="Трипваер", exact=True).click()
             page.get_by_role("heading", name="Трипваер", exact=True).wait_for()
             page.get_by_role("heading", name="Готовность Lava.top", exact=True).wait_for()
+            page.get_by_role(
+                "heading", name="Оферта и правила разовой покупки", exact=True
+            ).wait_for()
             page.get_by_role("button", name="Создать PDF из текста", exact=True).wait_for()
             page.get_by_text("Секреты хранятся в окружении", exact=False).wait_for()
             page.get_by_role("button", name="Отчёты", exact=True).click()
