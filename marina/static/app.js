@@ -52,6 +52,7 @@ const states = {
   uncertain: "Нужна сверка",
   revoked: "Отозвано",
   valid: "Расчёт готов",
+  missing: "Не настроено",
 };
 const kinds = {
   video_review: "Видео и диагностика",
@@ -235,6 +236,7 @@ async function refresh() {
     pages.push(
       ["queue", "Очередь специалиста", adminQueue],
       ["crm", "CRM", adminCrm],
+      ["tripwire", "Трипваер", adminTripwire],
       ["content", "Контент и настройки", adminContent],
       ["accounts", "Клиенты", adminAccounts],
       ["operations", "Эксплуатация", operations],

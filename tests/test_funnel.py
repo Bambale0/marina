@@ -166,7 +166,7 @@ def capture(app):
     return sent, files
 
 
-def setup_sale(app, group="3-4"):
+def setup_sale(app, group="3-4", currency="XTR", **product_fields):
     app.config["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
     admin, owner = login(app), login(app, 2)
     policy(admin)
@@ -177,7 +177,15 @@ def setup_sale(app, group="3-4"):
     )
     assert response.status_code == 201, response.json
     material = approve_existing(admin, response.json)
-    p = product(admin, "guide", amount=123, material_id=material["id"], age_group=group)
+    p = product(
+        admin,
+        "guide",
+        amount=123,
+        currency=currency,
+        material_id=material["id"],
+        age_group=group,
+        **product_fields,
+    )
     config = scenario(
         admin, group, guide_product_id=p["id"], contact_url="https://t.me/synthetic_fixture"
     )
@@ -189,9 +197,236 @@ def setup_sale(app, group="3-4"):
     assert "ИТОГ СКРИНИНГА" in sent[-1][1]["text"]
     app.clock[0] += 2
     drain(app)
-    assert "123 ⭐" in sent[-1][1]["text"]
+    assert ("123 ⭐" if currency == "XTR" else "1,23 ₽") in sent[-1][1]["text"]
     run = owner.get("/api/funnel-runs/" + run["id"]).json
     return admin, owner, run, config, material, sent, files
+
+
+def test_lava_tripwire_checkout_verifies_payment_and_delivers_pdf(app):
+    app.config.update(
+        DEV_EXTERNAL_LAVA_CHECKOUT=True,
+        LAVA_API_KEY="test-api-key",
+        LAVA_WEBHOOK_SECRET="test-webhook-key",
+        PUBLIC_URL="https://dev.example.test",
+    )
+    admin, owner, run, _, _, sent, files = setup_sale(
+        app,
+        currency="RUB",
+        lava_offer_id="836b9fc5-7ae9-4a27-9642-592bc44072b7",
+        web_sales_approved=True,
+    )
+    order_response = owner.post(f"/api/funnel-runs/{run['id']}/purchase", json={})
+    assert order_response.status_code == 200, order_response.json
+    order = order_response.json
+    assert order["data"]["provider"] == "lava"
+    assert order["data"]["currency"] == "RUB"
+    assert owner.post(f"/api/orders/{order['id']}/checkout", json={}).status_code == 422
+
+    upstream = app.config["HTTP_TRANSPORT"]
+    lava_calls = []
+
+    def transport(method, url, data, headers):
+        if url.startswith("https://gate.lava.top"):
+            lava_calls.append((method, url, data, headers))
+            if method == "POST":
+                return {
+                    "id": "7ea82675-4ded-4133-95a7-a6efbaf165cc",
+                    "status": "new",
+                    "paymentUrl": "https://app.lava.top/payment/test-contract",
+                }
+            return {
+                "id": "7ea82675-4ded-4133-95a7-a6efbaf165cc",
+                "status": "completed",
+                "datetime": "2027-01-15T08:00:00Z",
+                "receipt": {"amount": 1.23, "currency": "RUB"},
+            }
+        return upstream(method, url, data, headers)
+
+    app.config["HTTP_TRANSPORT"] = transport
+    checkout = owner.post(
+        f"/api/orders/{order['id']}/checkout", json={"email": "buyer@example.test"}
+    )
+    assert checkout.status_code == 202, checkout.json
+    attempt = checkout.json
+    assert work_once(app) == 1
+    attempt = admin.get("/api/admin/objects/" + attempt["id"]).json["object"]
+    assert attempt["status"] == "ready"
+    assert attempt["data"]["url"] == "https://app.lava.top/payment/test-contract"
+    drain(app)
+    assert any("Lava.top" in data.get("text", "") for _, data in sent)
+    request = lava_calls[0]
+    assert request[0:2] == ("POST", "https://gate.lava.top/api/v3/invoice")
+    assert request[2] == {
+        "email": "buyer@example.test",
+        "offerId": "836b9fc5-7ae9-4a27-9642-592bc44072b7",
+        "currency": "RUB",
+        "amount": 1.23,
+        "periodicity": "ONE_TIME",
+        "clientUtm": {"utm_source": attempt["id"]},
+        "successful_return_url": "https://dev.example.test/?payment=success",
+        "failure_return_url": "https://dev.example.test/?payment=failed",
+        "cancel_return_url": "https://dev.example.test/?payment=cancelled",
+    }
+    webhook = {
+        "eventType": "payment.success",
+        "contractId": "7ea82675-4ded-4133-95a7-a6efbaf165cc",
+        "amount": 1.23,
+        "currency": "RUB",
+        "timestamp": "2027-01-15T08:00:00Z",
+        "status": "completed",
+    }
+    assert app.test_client().post("/api/webhooks/lava", json=webhook).status_code == 401
+    response = app.test_client().post(
+        "/api/webhooks/lava", headers={"X-Api-Key": "test-webhook-key"}, json=webhook
+    )
+    assert response.status_code == 200, response.json
+    drain(app)
+    assert owner.get("/api/funnel-runs/" + run["id"]).json["data"]["guide_delivered_at"]
+    assert len(files) == 1 and files[0][2].startswith(b"%PDF")
+    assert any(call[0] == "GET" and call[1].endswith(webhook["contractId"]) for call in lava_calls)
+    repeated = app.test_client().post(
+        "/api/webhooks/lava", headers={"X-Api-Key": "test-webhook-key"}, json=webhook
+    )
+    assert repeated.status_code == 200, repeated.json
+    drain(app)
+    assert len(files) == 1
+
+
+def test_telegram_lava_tripwire_collects_email_before_checkout(app):
+    app.config.update(
+        DEV_EXTERNAL_LAVA_CHECKOUT=True,
+        LAVA_API_KEY="test-api-key",
+        LAVA_WEBHOOK_SECRET="test-webhook-key",
+        PUBLIC_URL="https://dev.example.test",
+    )
+    admin, owner, run, _, _, sent, _ = setup_sale(
+        app,
+        currency="RUB",
+        lava_offer_id="836b9fc5-7ae9-4a27-9642-592bc44072b7",
+        web_sales_approved=True,
+    )
+    privacy = publish(
+        admin,
+        "policy",
+        {
+            "type": "privacy",
+            "terms": "Consent before checkout",
+            "media_max_bytes": 10000,
+            "retention_days": 30,
+        },
+    )
+    owner.post("/api/consents", json={"policy_id": privacy["id"], "accepted": True})
+    upstream = app.config["HTTP_TRANSPORT"]
+
+    def transport(method, url, data, headers):
+        if url == "https://gate.lava.top/api/v3/invoice":
+            return {
+                "id": "7ea82675-4ded-4133-95a7-a6efbaf165cc",
+                "status": "new",
+                "paymentUrl": "https://app.lava.top/payment/test-contract",
+            }
+        return upstream(method, url, data, headers)
+
+    app.config["HTTP_TRANSPORT"] = transport
+    counter = iter(range(700, 800))
+
+    def click(title_prefix):
+        button = next(
+            button
+            for row in sent[-1][1]["reply_markup"]["inline_keyboard"]
+            for button in row
+            if button["text"].startswith(title_prefix)
+        )
+        handle_update(
+            app,
+            {
+                "update_id": next(counter),
+                "callback_query": {
+                    "id": "fixture",
+                    "from": {"id": 2, "first_name": "Мама"},
+                    "data": button["callback_data"],
+                    "message": {"chat": {"id": 2, "type": "private"}},
+                },
+            },
+        )
+
+    click("💳 Забрать руководство")
+    assert "email" in sent[-1][1]["text"]
+    handle_update(
+        app,
+        {
+            "update_id": next(counter),
+            "message": {
+                "from": {"id": 2, "first_name": "Мама"},
+                "chat": {"id": 2, "type": "private"},
+                "text": "buyer@example.test",
+            },
+        },
+    )
+    assert "Готовлю счёт" in sent[-1][1]["text"]
+    drain(app)
+    assert "Lava.top" in sent[-1][1]["text"]
+    assert sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]["url"].startswith(
+        "https://app.lava.top/"
+    )
+    current = owner.get("/api/funnel-runs/" + run["id"]).json
+    assert current["data"]["order_status"] == "pending"
+
+
+def test_external_lava_tripwire_is_disabled_without_explicit_dev_gate(app):
+    app.config["DEV_EXTERNAL_LAVA_CHECKOUT"] = True
+    _, owner, run, _, _, _, _ = setup_sale(
+        app,
+        currency="RUB",
+        lava_offer_id="836b9fc5-7ae9-4a27-9642-592bc44072b7",
+        web_sales_approved=True,
+    )
+    app.config["DEV_EXTERNAL_LAVA_CHECKOUT"] = False
+    response = owner.post(f"/api/funnel-runs/{run['id']}/purchase", json={})
+    assert response.status_code == 422
+    assert "не разрешена" in response.json["error"]
+
+
+def test_admin_renders_text_material_and_lists_tripwire_entities(app):
+    admin, owner = login(app), login(app, 2)
+    draft = admin.post(
+        "/api/admin/content",
+        json={
+            "kind": "material",
+            "title": "Базовый PDF трипваера",
+            "data": {
+                "owner": "Специалист",
+                "status": "received",
+                "source": "Тест механики по поручению владельца",
+                "rights": "Внутренний тест",
+                "format": "pdf",
+                "needs_video": False,
+                "text": "Базовый текст для проверки выдачи PDF после оплаты.",
+                "filename": "tripwire-test.pdf",
+            },
+            "reason": "Подготовить тестовую выдачу",
+        },
+    ).json
+    rendered = admin.post(
+        f"/api/admin/materials/{draft['id']}/render-pdf",
+        json={"revision": draft["revision"], "reason": "Сформировать тестовый PDF"},
+    )
+    assert rendered.status_code == 200, rendered.json
+    material = rendered.json
+    assert material["data"]["asset_id"]
+    pdf = admin.get(f"/api/admin/materials/{material['id']}/pdf")
+    assert pdf.status_code == 200 and pdf.data.startswith(b"%PDF")
+
+    assert owner.get("/api/admin/tripwire").status_code == 403
+    dashboard = admin.get("/api/admin/tripwire")
+    assert dashboard.status_code == 200, dashboard.json
+    assert dashboard.json["integrations"] == {
+        "lava_api": False,
+        "lava_webhook": False,
+        "public_https": False,
+        "external_lava_test_mode": False,
+    }
+    assert dashboard.json["entities"]["material"]["draft"] == 1
 
 
 def test_consent_unpublished_copy_and_version_snapshots(app):

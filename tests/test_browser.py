@@ -171,6 +171,11 @@ def test_browser_admin_and_profile_forms(app, tmp_path):
             assert stored["data"]["conclusion_draft"] == "Browser specialist mini-conclusion"
             page.get_by_role("button", name="Все объекты", exact=True).click()
             page.get_by_role("heading", name="Все объекты", exact=True).wait_for()
+            page.get_by_role("button", name="Трипваер", exact=True).click()
+            page.get_by_role("heading", name="Трипваер", exact=True).wait_for()
+            page.get_by_role("heading", name="Готовность Lava.top", exact=True).wait_for()
+            page.get_by_role("button", name="Создать PDF из текста", exact=True).wait_for()
+            page.get_by_text("Секреты хранятся в окружении", exact=False).wait_for()
             page.get_by_role("button", name="Отчёты", exact=True).click()
             page.get_by_role("heading", name="Операционные отчёты", exact=True).wait_for()
             assert not errors, errors

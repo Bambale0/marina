@@ -94,7 +94,9 @@ def invoice(app, attempt):
             "amount": d["total"] / 100,
             "periodicity": "ONE_TIME",
             "clientUtm": {"utm_source": attempt["id"]},
-            "successful_return_url": app.config["PUBLIC_URL"] + "/?payment=return",
+            "successful_return_url": app.config["PUBLIC_URL"] + "/?payment=success",
+            "failure_return_url": app.config["PUBLIC_URL"] + "/?payment=failed",
+            "cancel_return_url": app.config["PUBLIC_URL"] + "/?payment=cancelled",
         },
     )
     require(
@@ -110,7 +112,7 @@ def check_lava(app, db, attempt, now):
     d = attempt["data"]
     require(d.get("provider_id"), "Сначала сопоставьте внешний счёт")
     remote_invoice = lava(app, "GET", "/api/v1/invoices/" + quote(d["provider_id"], safe=""))
-    if remote_invoice.get("status") != "completed":
+    if str(remote_invoice.get("status", "")).lower() != "completed":
         return {"status": remote_invoice.get("status", "unknown")}
     receipt = remote_invoice.get("receipt", {})
     try:
@@ -260,11 +262,14 @@ def register_providers(app):
                 return {"ok": True, "queued": True}
             return {"ok": True}
         with transaction(app.config["DATABASE"]) as db:
-            if d.get("event_type") in ("refund.success", "chargeback.initiated"):
+            event_type = d.get("eventType")
+            if event_type in ("refund.success", "chargeback.initiated"):
                 # Preserve authenticated financial evidence; policy-sensitive revocation is explicit.
-                event_id = d.get("event_id")
+                event_id = ":".join(
+                    str(d.get(key, "")) for key in ("eventType", "contractId", "timestamp")
+                )
                 require(
-                    isinstance(event_id, str) and len(event_id) < 200,
+                    d.get("contractId") and d.get("timestamp") and len(event_id) < 300,
                     "Неверное событие",
                 )
                 from .screening import idempotent
@@ -277,7 +282,7 @@ def register_providers(app):
                     lambda: insert(
                         db,
                         "reconciliation",
-                        {"issue": d["event_type"], "financial_event": d},
+                        {"issue": event_type, "financial_event": d},
                         g.now,
                         status="open",
                     ),

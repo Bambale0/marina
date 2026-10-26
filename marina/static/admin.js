@@ -119,6 +119,7 @@ const labels = {
   exercise_ids: "Версии упражнений урока, через запятую",
   requires: "Предыдущие уроки, через запятую",
   format: "Формат",
+  filename: "Имя PDF-файла",
   needs_video: "Нужно видео",
   model: "Модель",
   max_output_tokens: "Лимит токенов ответа",
@@ -136,6 +137,8 @@ const templates = {
     format: "",
     rights: "",
     needs_video: true,
+    text: "",
+    filename: "material.pdf",
   },
   method: {
     audience: "child",
@@ -439,6 +442,109 @@ async function adminContent() {
   );
   await load();
 }
+
+async function adminTripwire() {
+  const data = await api("/admin/tripwire");
+  const integrationRows = Object.entries({
+    "API Lava.top": data.integrations.lava_api,
+    "Ключ webhook Lava.top": data.integrations.lava_webhook,
+    "Публичный HTTPS-адрес": data.integrations.public_https,
+    "Тестовый внешний checkout": data.integrations.external_lava_test_mode,
+  }).map(([title, ready]) =>
+    el(
+      "div",
+      { class: "row between" },
+      el("span", {}, title),
+      badge(ready ? "active" : "missing"),
+    ),
+  );
+  const openContent = async (id) => editContent(await api("/admin/content/" + id));
+  const groups = data.groups.map((group) => {
+    const funnel = group.funnel,
+      product = group.product,
+      material = group.material;
+    return el(
+      "article",
+      { class: "card" },
+      el("h2", {}, group.label),
+      funnel
+        ? el(
+            "section",
+            {},
+            el("h3", {}, "Сценарий"),
+            badge(funnel.status),
+            el(
+              "p",
+              { class: "quiet" },
+              "Редакция " + funnel.revision +
+                (funnel.contact_configured ? " · контакт настроен" : " · нет контакта"),
+            ),
+            button("Открыть сценарий", () => openContent(funnel.id), true),
+          )
+        : el("p", { class: "overdue" }, "Опубликованный сценарий отсутствует"),
+      product
+        ? el(
+            "section",
+            {},
+            el("h3", {}, "Тариф"),
+            badge(product.status),
+            el(
+              "p",
+              {},
+              String(product.amount) + " " + product.currency +
+                (product.lava_offer_configured ? " · Lava offer настроен" : " · нет Lava offer"),
+            ),
+            button("Открыть тариф", () => openContent(product.id), true),
+          )
+        : el("p", { class: "overdue" }, "Тариф не привязан"),
+      material
+        ? el(
+            "section",
+            {},
+            el("h3", {}, "PDF-материал"),
+            badge(material.status),
+            el(
+              "p",
+              { class: material.asset_configured ? "quiet" : "overdue" },
+              material.asset_configured ? "PDF прикреплён" : "PDF не сформирован",
+            ),
+            button("Открыть материал", () => openContent(material.id), true),
+          )
+        : el("p", { class: "overdue" }, "Материал не привязан"),
+    );
+  });
+  main(
+    heading(
+      "Трипваер",
+      "Материалы, тарифы, сценарии и платёжные состояния управляются как отдельные версионируемые сущности.",
+    ),
+    el(
+      "section",
+      { class: "card" },
+      el("h2", {}, "Готовность Lava.top"),
+      ...integrationRows,
+      el(
+        "p",
+        { class: "quiet" },
+        "Внешняя оплата цифрового PDF из Telegram разрешается только на dev для ручного теста. Секреты хранятся в окружении и здесь не отображаются.",
+      ),
+    ),
+    el(
+      "div",
+      { class: "row toolbar" },
+      button("Создать PDF из текста", () => editContent(null, "material")),
+      button("Создать тариф", () => editContent(null, "product"), true),
+      button("Все сущности и операции", () => adminObjects(), true),
+    ),
+    el("div", { class: "stack spacer" }, ...groups),
+    el(
+      "section",
+      { class: "card" },
+      el("h2", {}, "Состояния сущностей"),
+      details(data.entities),
+    ),
+  );
+}
 async function editContent(obj, kind) {
   kind = obj?.kind || kind;
   let template = clone(templates[kind] || policyTemplates.commerce);
@@ -578,6 +684,16 @@ async function contentForm(obj, kind, template) {
           const url = await authenticatedFile("/admin/materials/" + obj.id + "/pdf");
           el("a", { href: url, download: "guide.pdf" }).click();
           setTimeout(() => URL.revokeObjectURL(url), 30000);
+        }, true));
+      }
+      if (kind === "material" && obj.data.text) {
+        f.append(button("Сформировать PDF из текста", async () => {
+          const rendered = await api("/admin/materials/" + obj.id + "/render-pdf", "POST", {
+            revision: obj.revision,
+            reason: why.get(),
+          });
+          notice("PDF сформирован и прикреплён к черновику.");
+          await editContent(rendered);
         }, true));
       }
       const file = field("Видео MP4 / материал", "file");

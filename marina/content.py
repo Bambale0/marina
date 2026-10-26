@@ -343,6 +343,16 @@ def validate(obj):
             d.get("owner") and d.get("status"),
             "Укажите владельца и состояние готовности",
         )
+    if obj["kind"] == "material" and d.get("text"):
+        import re
+
+        require(
+            isinstance(d["text"], str)
+            and 1 <= len(d["text"]) <= 50000
+            and isinstance(d.get("filename"), str)
+            and re.fullmatch(r"[A-Za-z0-9_-]+\.pdf", d["filename"]),
+            "Для текстового материала укажите текст и имя PDF латиницей",
+        )
     if obj["kind"] == "method":
         from .screening import validate_method
 
