@@ -211,11 +211,14 @@ class Bot:
             + [("В админку", "admin_menu", {})],
         )
 
-    def admin_content_list(self, kind):
+    def admin_content_list(self, kind, offset=0):
         self.require_admin()
         allowed = {value for _, value in ADMIN_CONTENT_KINDS}
         require(kind in allowed, "Неизвестный тип сущности")
-        items = self.api("/admin/content?kind=" + kind + "&order=desc")["items"]
+        offset = max(0, int(offset))
+        items = self.api("/admin/content?kind=" + kind + "&order=desc&offset=" + str(offset))[
+            "items"
+        ]
         title = ADMIN_KIND_LABELS[kind]
         buttons = [
             (
@@ -225,12 +228,26 @@ class Bot:
             )
             for o in items[:30]
         ]
+        if offset:
+            buttons.append(
+                ("Назад", "admin_content_list", {"kind": kind, "offset": max(0, offset - 30)})
+            )
+        if len(items) > 30:
+            buttons.append(("Далее", "admin_content_list", {"kind": kind, "offset": offset + 30}))
         buttons += [
             ("Создать", "admin_content_create", {"kind": kind}),
             ("К разделам", "admin_content_kinds", {}),
             ("В админку", "admin_menu", {}),
         ]
-        return self.send(title + ": " + str(len(items)) + ".", buttons)
+        return self.send(
+            title
+            + ". Показаны записи "
+            + str(offset + 1 if items else 0)
+            + "–"
+            + str(offset + min(30, len(items)))
+            + ".",
+            buttons,
+        )
 
     def admin_content_card(self, id):
         self.require_admin()
@@ -270,9 +287,12 @@ class Bot:
         ]
         return self.send(text, buttons)
 
-    def admin_entity_list(self, kind):
+    def admin_entity_list(self, kind, offset=0):
         self.require_admin()
-        items = self.api("/admin/objects?kind=" + kind + "&order=desc")["items"]
+        offset = max(0, int(offset))
+        items = self.api("/admin/objects?kind=" + kind + "&order=desc&offset=" + str(offset))[
+            "items"
+        ]
         buttons = [
             (
                 str(o["data"].get("title") or o["data"].get("topic") or o["id"])[:48]
@@ -283,9 +303,20 @@ class Bot:
             )
             for o in items[:30]
         ]
+        if offset:
+            buttons.append(
+                ("Назад", "admin_entity_list", {"kind": kind, "offset": max(0, offset - 30)})
+            )
+        if len(items) > 30:
+            buttons.append(("Далее", "admin_entity_list", {"kind": kind, "offset": offset + 30}))
         buttons.append(("Все сущности", "admin_entities", {}))
         return self.send(
-            ADMIN_KIND_LABELS.get(kind, kind) + ": " + str(len(items)) + ".",
+            ADMIN_KIND_LABELS.get(kind, kind)
+            + ". Показаны записи "
+            + str(offset + 1 if items else 0)
+            + "–"
+            + str(offset + min(30, len(items)))
+            + ".",
             buttons,
         )
 
@@ -1092,7 +1123,7 @@ class Bot:
         elif action == "admin_content_kinds":
             self.admin_content_kinds()
         elif action == "admin_content_list":
-            self.admin_content_list(d["kind"])
+            self.admin_content_list(d["kind"], d.get("offset", 0))
         elif action == "admin_content_card":
             self.admin_content_card(d["id"])
         elif action == "admin_content_export":
@@ -1168,7 +1199,7 @@ class Bot:
             buttons.append(("В админку", "admin_menu", {}))
             self.send("\n".join(lines), buttons)
         elif action == "admin_entity_list":
-            self.admin_entity_list(d["kind"])
+            self.admin_entity_list(d["kind"], d.get("offset", 0))
         elif action == "admin_entity_card":
             self.admin_entity_card(d["id"])
         elif action == "admin_object_export":
