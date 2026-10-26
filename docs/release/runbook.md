@@ -23,9 +23,12 @@ LAVA_API_KEY=<исходящий ключ API>
 LAVA_WEBHOOK_SECRET=<отдельный ключ входящего webhook>
 PUBLIC_URL=https://<публичный-dev-адрес>
 DEV_EXTERNAL_LAVA_CHECKOUT=1
+DEV_TRIPWIRE_BYPASS_PAYMENT=1
 ```
 
 `DEV_EXTERNAL_LAVA_CHECKOUT` разрешён только для ручной проверки dev-сценария и по умолчанию выключен. В кабинете Lava.top webhook направляется на `PUBLIC_URL/api/webhooks/lava` и передаёт `LAVA_WEBHOOK_SECRET` в `X-Api-Key`. Не выводить значения ключей в журнал, административный интерфейс или команды проверки.
+
+`DEV_TRIPWIRE_BYPASS_PAYMENT` — отдельный временный режим для проверки предложения до появления цены и Lava offer. Он показывает «Принять / Отменить» и выдаёт PDF без заказа и оплаты. Не включать его в коммерческой среде; после настройки тарифа выключить и проверить настоящий платёжный путь.
 
 Платёжные события приходят в плоском camelCase-формате, а `refund.success` и `chargeback.initiated` — в snake_case envelope с `event_id`, `event_type`, `created_at` и `data`. Последние сохраняются один раз по `event_id` как задача сверки; они не отзывают клиентское право автоматически без утверждённой политики.
 
