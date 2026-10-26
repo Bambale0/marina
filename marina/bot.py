@@ -189,7 +189,13 @@ class Bot:
     def admin_menu(self):
         self.require_admin()
         if str(self.state["data"].get("step") or "").startswith("admin_"):
-            self.state_set(step=None, admin_pending=None, admin_object_id=None, admin_kind=None)
+            self.state_set(
+                step=None,
+                admin_pending=None,
+                admin_object_id=None,
+                admin_object_revision=None,
+                admin_kind=None,
+            )
         return self.send(
             "Админка Марины в Telegram. Выберите раздел. Все изменения и чувствительные "
             "действия сохраняются с указанной вами причиной в неизменяемом журнале.",
@@ -1156,7 +1162,11 @@ class Bot:
             self.require_admin()
             o = self.api("/admin/content/" + d["id"])
             require(o["status"] == "draft", "Изменять можно только черновик")
-            self.state_set(step="admin_content_edit_payload", admin_object_id=o["id"])
+            self.state_set(
+                step="admin_content_edit_payload",
+                admin_object_id=o["id"],
+                admin_object_revision=o["revision"],
+            )
             self.send(
                 "Отправьте полную новую редакцию JSON текстом или файлом .json: "
                 '{"title":"Название","data":{...}}. Затем бот отдельно запросит причину.'
@@ -1167,11 +1177,13 @@ class Bot:
                 d["command"] in ("copy", "approve", "publish", "archive", "delete"),
                 "Действие недоступно",
             )
+            current = self.api("/admin/content/" + d["id"])
             self.state_set(
                 step="admin_reason",
                 admin_pending={
                     "type": "content_action",
-                    "id": d["id"],
+                    "id": current["id"],
+                    "revision": current["revision"],
                     "command": d["command"],
                 },
             )
@@ -1269,15 +1281,24 @@ class Bot:
             self.admin_card(d["id"])
         elif action == "admin_text":
             self.require_admin()
-            self.state_set(step="admin_text", object_id=d["id"], command=d["command"])
+            current = self.api("/admin/objects/" + d["id"])["object"]
+            self.state_set(
+                step="admin_text",
+                object_id=current["id"],
+                object_revision=current["revision"],
+                command=d["command"],
+            )
             self.send("Введите текст. После этого бот отдельно запросит причину действия.")
         elif action == "admin_command":
             self.require_admin()
+            current = self.api("/admin/objects/" + d["id"])["object"]
             self.state_set(
                 step="admin_reason",
                 admin_pending={
                     "type": "object_action",
-                    "id": d["id"],
+                    "id": current["id"],
+                    "revision": current["revision"],
+                    "text_revision": len(current["data"].get("revisions", [])),
                     "route": d["route"],
                     "command": d["command"],
                 },
@@ -1593,6 +1614,7 @@ class Bot:
                 pending["kind"] = self.state["data"]["admin_kind"]
             else:
                 pending["id"] = self.state["data"]["admin_object_id"]
+                pending["revision"] = self.state["data"]["admin_object_revision"]
             self.state_set(step="admin_reason", admin_pending=pending)
             return self.send("Укажите причину сохранения. Она попадёт в журнал аудита.")
         if step == "admin_text":
@@ -1603,6 +1625,7 @@ class Bot:
                 admin_pending={
                     "type": "object_text",
                     "id": d["object_id"],
+                    "revision": d["object_revision"],
                     "command": d["command"],
                     "text": text,
                 },
@@ -1626,45 +1649,45 @@ class Bot:
                     },
                 )
             elif operation == "content_edit":
-                current = self.api("/admin/content/" + pending["id"])
                 result = self.api(
-                    "/admin/content/" + current["id"],
+                    "/admin/content/" + pending["id"],
                     "PATCH",
                     {
-                        "revision": current["revision"],
+                        "revision": pending["revision"],
                         "title": pending["title"],
                         "data": pending["data"],
                         "reason": text,
                     },
                 )
             elif operation == "content_action":
-                current = self.api("/admin/content/" + pending["id"])
                 result = self.api(
-                    "/admin/content/" + current["id"] + "/" + pending["command"],
+                    "/admin/content/" + pending["id"] + "/" + pending["command"],
                     "POST",
-                    {"revision": current["revision"], "reason": text},
+                    {"revision": pending["revision"], "reason": text},
                 )
             elif operation == "object_action":
-                current = self.api("/admin/objects/" + pending["id"])["object"]
                 self.api(
-                    "/admin/" + pending["route"] + "/" + current["id"] + "/" + pending["command"],
+                    "/admin/" + pending["route"] + "/" + pending["id"] + "/" + pending["command"],
                     "POST",
                     {
-                        "revision": current["revision"],
+                        "revision": pending["revision"],
                         "reason": text,
-                        "text_revision": len(current["data"].get("revisions", [])),
+                        "text_revision": pending["text_revision"],
                     },
                 )
-                result = {"id": current["id"], "kind": "object"}
+                result = {"id": pending["id"], "kind": "object"}
             elif operation == "object_text":
-                current = self.api("/admin/objects/" + pending["id"])["object"]
                 route, command = pending["command"].split("/")
                 self.api(
-                    "/admin/" + route + "/" + current["id"] + "/" + command,
+                    "/admin/" + route + "/" + pending["id"] + "/" + command,
                     "POST",
-                    {"revision": current["revision"], "text": pending["text"], "reason": text},
+                    {
+                        "revision": pending["revision"],
+                        "text": pending["text"],
+                        "reason": text,
+                    },
                 )
-                result = {"id": current["id"], "kind": "object"}
+                result = {"id": pending["id"], "kind": "object"}
             elif operation == "material_create":
                 result = self.api(
                     "/admin/content",
@@ -1682,8 +1705,10 @@ class Bot:
                 step=None,
                 admin_pending=None,
                 admin_object_id=None,
+                admin_object_revision=None,
                 admin_kind=None,
                 object_id=None,
+                object_revision=None,
                 command=None,
             )
             if result.get("kind") == "object":
