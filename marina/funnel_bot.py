@@ -122,6 +122,11 @@ def handle_action(bot, action, d):
             result.get("message", "Предложение закрыто. Результат скрининга сохранён в чате."),
             [("В меню", "menu", {})],
         )
+    elif action == "funnel_accept_dev":
+        if not bot.privacy_gate("funnel_accept_dev", {"id": d["id"]}):
+            return True
+        bot.api("/funnel-runs/" + d["id"] + "/dev-tripwire-accept", "POST", {})
+        bot.send("Принято. Готовлю тестовый PDF без списания оплаты.")
     elif action == "funnel_consultation":
         text = bot.api("/funnel-runs/" + d["id"] + "/consultation")["text"]
         bot.send(text, [("📅 Записаться на диагностику", "funnel_book", {"id": d["id"]})])

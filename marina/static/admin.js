@@ -450,6 +450,7 @@ async function adminTripwire() {
     "Ключ webhook Lava.top": data.integrations.lava_webhook,
     "Публичный HTTPS-адрес": data.integrations.public_https,
     "Тестовый внешний checkout": data.integrations.external_lava_test_mode,
+    "Ручной проход без оплаты": data.integrations.tripwire_payment_bypass,
   }).map(([title, ready]) =>
     el(
       "div",
@@ -526,7 +527,7 @@ async function adminTripwire() {
       el(
         "p",
         { class: "quiet" },
-        "Внешняя оплата цифрового PDF из Telegram разрешается только на dev для ручного теста. Секреты хранятся в окружении и здесь не отображаются.",
+        "Внешняя оплата и проход без цены разрешаются только на dev для ручного теста. Проход без оплаты не создаёт заказ или право. Секреты хранятся в окружении и здесь не отображаются.",
       ),
     ),
     el(

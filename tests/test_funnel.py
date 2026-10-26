@@ -202,8 +202,134 @@ def setup_sale(app, group="3-4", currency="XTR", **product_fields):
     return admin, owner, run, config, material, sent, files
 
 
+def test_dev_tripwire_without_price_can_be_accepted_and_delivers_pdf(app):
+    app.config["DEV_TRIPWIRE_BYPASS_PAYMENT"] = True
+    admin, owner = login(app), login(app, 2)
+    config = scenario(admin)
+    assert not config["data"]["guide_product_id"]
+    sent, files = capture(app)
+    run = finish(owner, start(owner), ["b"] * 6)
+    drain(app)
+    app.clock[0] += 30
+    drain(app)
+    app.clock[0] += 2
+    drain(app)
+
+    assert "будет указана позже" in sent[-1][1]["text"]
+    assert [
+        button["text"] for row in sent[-1][1]["reply_markup"]["inline_keyboard"] for button in row
+    ] == ["✅ Принять", "❌ Отменить"]
+    accepted = owner.post(f"/api/funnel-runs/{run['id']}/dev-tripwire-accept", json={})
+    assert accepted.status_code == 200, accepted.json
+    assert accepted.json["data"]["dev_tripwire_accepted_at"]
+    assert owner.post(f"/api/funnel-runs/{run['id']}/refuse", json={}).status_code == 422
+    drain(app)
+    assert len(files) == 1 and files[0][2].startswith(b"%PDF")
+    assert "Оплата не выполнялась" in sent[-1][1]["text"]
+    consultation = owner.get(f"/api/funnel-runs/{run['id']}/consultation").json["text"]
+    assert "TEST_PROMO" not in consultation
+    booking = owner.post(
+        f"/api/funnel-runs/{run['id']}/book", json={"preferences": "Завтра, 18:00 МСК"}
+    )
+    assert booking.status_code == 200, booking.json
+    assert booking.json["data"]["promotion"]["eligible"] is False
+    assert (
+        owner.post(f"/api/funnel-runs/{run['id']}/dev-tripwire-accept", json={}).status_code == 200
+    )
+    drain(app)
+    assert len(files) == 1
+    with connect(app.config["DATABASE"]) as db:
+        assert db.execute("SELECT count(*) FROM objects WHERE kind='order'").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM objects WHERE kind='right'").fetchone()[0] == 0
+
+
+def test_telegram_dev_tripwire_accept_button_continues_without_payment(app):
+    app.config["DEV_TRIPWIRE_BYPASS_PAYMENT"] = True
+    admin, owner = login(app), login(app, 2)
+    scenario(admin)
+    privacy = publish(
+        admin,
+        "policy",
+        {
+            "type": "privacy",
+            "terms": "Consent before dev tripwire",
+            "media_max_bytes": 10000,
+            "retention_days": 30,
+        },
+    )
+    owner.post("/api/consents", json={"policy_id": privacy["id"], "accepted": True})
+    sent, files = capture(app)
+    finish(owner, start(owner), ["b"] * 6)
+    drain(app)
+    app.clock[0] += 32
+    drain(app)
+    app.clock[0] += 2
+    drain(app)
+    button = next(
+        button
+        for row in sent[-1][1]["reply_markup"]["inline_keyboard"]
+        for button in row
+        if button["text"] == "✅ Принять"
+    )
+    publish(
+        admin,
+        "policy",
+        {
+            "type": "privacy",
+            "terms": "Renewed consent before dev tripwire",
+            "media_max_bytes": 10000,
+            "retention_days": 30,
+        },
+    )
+    handle_update(
+        app,
+        {
+            "update_id": 850,
+            "callback_query": {
+                "id": "dev-tripwire",
+                "from": {"id": 2, "first_name": "Мама"},
+                "data": button["callback_data"],
+                "message": {"chat": {"id": 2, "type": "private"}},
+            },
+        },
+    )
+    assert sent[-1][1]["text"] == "Renewed consent before dev tripwire"
+    consent = sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    handle_update(
+        app,
+        {
+            "update_id": 851,
+            "callback_query": {
+                "id": "dev-tripwire-consent",
+                "from": {"id": 2, "first_name": "Мама"},
+                "data": consent,
+                "message": {"chat": {"id": 2, "type": "private"}},
+            },
+        },
+    )
+    assert "без списания оплаты" in sent[-1][1]["text"]
+    drain(app)
+    assert len(files) == 1
+    assert "Оплата не выполнялась" in sent[-1][1]["text"]
+
+
+def test_dev_tripwire_without_explicit_bypass_stays_closed(app):
+    admin, owner = login(app), login(app, 2)
+    scenario(admin)
+    sent, _ = capture(app)
+    run = finish(owner, start(owner), ["b"] * 6)
+    drain(app)
+    app.clock[0] += 32
+    drain(app)
+    assert not any("✅ Принять" in str(data) for _, data in sent)
+    assert (
+        owner.post(f"/api/funnel-runs/{run['id']}/dev-tripwire-accept", json={}).status_code == 404
+    )
+
+
 def test_lava_tripwire_checkout_verifies_payment_and_delivers_pdf(app):
     app.config.update(
+        DEV_TRIPWIRE_BYPASS_PAYMENT=True,
         DEV_EXTERNAL_LAVA_CHECKOUT=True,
         LAVA_API_KEY="test-api-key",
         LAVA_WEBHOOK_SECRET="test-webhook-key",
@@ -214,6 +340,9 @@ def test_lava_tripwire_checkout_verifies_payment_and_delivers_pdf(app):
         currency="RUB",
         lava_offer_id="836b9fc5-7ae9-4a27-9642-592bc44072b7",
         web_sales_approved=True,
+    )
+    assert (
+        owner.post(f"/api/funnel-runs/{run['id']}/dev-tripwire-accept", json={}).status_code == 422
     )
     order_response = owner.post(f"/api/funnel-runs/{run['id']}/purchase", json={})
     assert order_response.status_code == 200, order_response.json
@@ -499,6 +628,7 @@ def test_admin_renders_text_material_and_lists_tripwire_entities(app):
         "lava_webhook": False,
         "public_https": False,
         "external_lava_test_mode": False,
+        "tripwire_payment_bypass": False,
     }
     assert dashboard.json["entities"]["material"]["draft"] == 1
 

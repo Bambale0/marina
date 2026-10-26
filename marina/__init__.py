@@ -134,6 +134,7 @@ def create_app(config=None):
         TELEGRAM_WEBHOOK_SECRET=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
         DEV_OFFER_BYPASSES_CONSENT=os.getenv("DEV_OFFER_BYPASSES_CONSENT") == "1",
         DEV_EXTERNAL_LAVA_CHECKOUT=os.getenv("DEV_EXTERNAL_LAVA_CHECKOUT") == "1",
+        DEV_TRIPWIRE_BYPASS_PAYMENT=os.getenv("DEV_TRIPWIRE_BYPASS_PAYMENT") == "1",
         SALES_ENABLED=False,
     )
     if config:

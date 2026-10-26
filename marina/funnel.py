@@ -608,6 +608,10 @@ def register_funnel(app):
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(obj["status"] == "completed", "Сначала завершите скрининг")
         require(obj["data"].get("order_status") != "paid", "Руководство уже оплачено")
+        require(
+            not obj["data"].get("dev_tripwire_accepted_at"),
+            "Тестовое руководство уже принято",
+        )
         if obj["data"].get("refused_at"):
             return public_run(obj)
         cancel(g.db, obj, ("funnel.offer", "funnel.cart"))
@@ -670,6 +674,7 @@ def register_funnel(app):
                     "regular_amount_rub": obj["data"]["snapshot"]["consultation_regular_rub"],
                     "eligible": bool(
                         obj["data"].get("guide_delivered_at")
+                        and not obj["data"].get("dev_tripwire_accepted_at")
                         and obj["data"].get("consultation_expires", 0) > g.now
                     ),
                     "expires": obj["data"].get("consultation_expires"),
@@ -704,9 +709,62 @@ def register_funnel(app):
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(obj["status"] == "completed", "Сначала завершите скрининг")
         data = obj["data"]
-        eligible = data.get("guide_delivered_at") and data.get("consultation_expires", 0) > g.now
+        eligible = (
+            data.get("guide_delivered_at")
+            and not data.get("dev_tripwire_accepted_at")
+            and data.get("consultation_expires", 0) > g.now
+        )
         key = "consultation_text" if eligible else "consultation_intro_text"
         return {"text": render_copy(data["snapshot"][key], data["snapshot"], g.actor["name"])}
+
+    @app.post("/api/funnel-runs/<id>/dev-tripwire-accept")
+    @protected()
+    def accept_dev_tripwire(id):
+        require(
+            app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False),
+            "Тестовый проход без оплаты отключён",
+            404,
+        )
+        obj = object_get(g.db, id, "funnel_run", g.actor["id"])
+        data = obj["data"]
+        require(
+            obj["status"] == "completed" and data.get("result", {}).get("zone") == "yellow",
+            "Тестовый трипваер недоступен для этого результата",
+        )
+        require(
+            not data.get("snapshot", {}).get("guide_product_id"),
+            "Для опубликованного продукта требуется оплата",
+        )
+        if data.get("dev_tripwire_accepted_at"):
+            return public_run(obj)
+        require(
+            data.get("offer_expires", 0) > g.now
+            and not data.get("refused_at")
+            and not data.get("booking_id"),
+            "Предложение истекло или закрыто",
+        )
+        result = update(
+            g.db,
+            obj,
+            g.now,
+            {
+                **data,
+                "dev_tripwire_accepted_at": g.now,
+                "tags": sorted(set(data.get("tags", []) + ["dev:tripwire_accepted"])),
+            },
+        )
+        cancel(g.db, result, ("funnel.offer", "funnel.cart", "funnel.refusal"))
+        schedule(g.db, result, "funnel.guide", g.now)
+        audit(
+            g.db,
+            g.actor["id"],
+            "funnel.dev_tripwire_accept",
+            result,
+            g.now,
+            "Ручной dev-проход без платежа",
+            obj["revision"],
+        )
+        return public_run(result)
 
     @app.post("/api/funnel-runs/<id>/purchase")
     @protected()
@@ -997,6 +1055,9 @@ def register_funnel(app):
                 "external_lava_test_mode": bool(
                     app.config.get("DEV_EXTERNAL_LAVA_CHECKOUT", False)
                 ),
+                "tripwire_payment_bypass": bool(
+                    app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
+                ),
             },
             "groups": groups,
             "entities": entities,
@@ -1128,6 +1189,8 @@ def notify_funnel(app, owner, id, event):
     if event == "funnel.profile":
         return apply_profile_job(app, owner, id)
     now = int(app.config["CLOCK"]())
+    dev_offer = False
+    dev_delivery = False
     with connect(app.config["DATABASE"]) as db:
         obj = object_get(db, id, owner=owner)
         account = db.execute("SELECT * FROM accounts WHERE id=?", (owner,)).fetchone()
@@ -1146,7 +1209,10 @@ def notify_funnel(app, owner, id, event):
         ):
             return
         if event.startswith(("funnel.cart", "funnel.offer")) and (
-            d.get("refused_at") or d.get("order_status") == "paid" or d.get("booking_id")
+            d.get("refused_at")
+            or d.get("order_status") == "paid"
+            or d.get("dev_tripwire_accepted_at")
+            or d.get("booking_id")
         ):
             return
         if event.startswith("funnel.followup") and (
@@ -1154,19 +1220,28 @@ def notify_funnel(app, owner, id, event):
         ):
             return
         if event.startswith("funnel.followup"):
-            right = object_get(db, d.get("guide_right_id"), "right", owner)
-            if right["status"] != "active":
-                return
+            if not d.get("dev_tripwire_accepted_at"):
+                right = object_get(db, d.get("guide_right_id"), "right", owner)
+                if right["status"] != "active":
+                    return
         if event in ("funnel.offer", "funnel.cart.first", "funnel.cart.last"):
-            if not snapshot.get("guide_product_id"):
-                return
-            product = object_get(db, snapshot["guide_product_id"], "product")
-            external_lava = lava_guide_ready(app, product)
-            if product["status"] != "published" or not (
-                product["data"].get("currency") == "XTR" or external_lava
-            ):
-                return
-            price = price_text(product)
+            dev_offer = bool(
+                event == "funnel.offer"
+                and app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
+                and not snapshot.get("guide_product_id")
+            )
+            if dev_offer:
+                price = "будет указана позже"
+            else:
+                if not snapshot.get("guide_product_id"):
+                    return
+                product = object_get(db, snapshot["guide_product_id"], "product")
+                external_lava = lava_guide_ready(app, product)
+                if product["status"] != "published" or not (
+                    product["data"].get("currency") == "XTR" or external_lava
+                ):
+                    return
+                price = price_text(product)
             if event != "funnel.offer" and now >= d.get("offer_expires", 0):
                 return
             if event.startswith("funnel.cart"):
@@ -1174,13 +1249,19 @@ def notify_funnel(app, owner, id, event):
                 if order["status"] != "pending":
                     return
         if event == "funnel.guide":
-            right = object_get(db, d.get("guide_right_id"), "right", owner)
-            if right["status"] != "active" or d.get("guide_delivered_at"):
+            dev_delivery = bool(d.get("dev_tripwire_accepted_at"))
+            if d.get("guide_delivered_at"):
                 return
-            blob = db.execute(
-                "SELECT body FROM blobs WHERE id=?", (right["data"]["asset_id"],)
-            ).fetchone()
-            require(blob, "PDF не найден")
+            if dev_delivery:
+                blob = {"body": render_guide(snapshot)}
+            else:
+                right = object_get(db, d.get("guide_right_id"), "right", owner)
+                if right["status"] != "active":
+                    return
+                blob = db.execute(
+                    "SELECT body FROM blobs WHERE id=?", (right["data"]["asset_id"],)
+                ).fetchone()
+                require(blob, "PDF не найден")
         if event == "funnel.refusal":
             if not d.get("refused_at") or d.get("order_status") == "paid" or d.get("booking_id"):
                 return
@@ -1245,18 +1326,29 @@ def notify_funnel(app, owner, id, event):
         with transaction(app.config["DATABASE"]) as db:
             current = object_get(db, id)
             update(db, current, now, {**current["data"], "result_sent_at": now})
-            if d["result"]["zone"] == "yellow" and snapshot.get("guide_product_id"):
+            if d["result"]["zone"] == "yellow" and (
+                snapshot.get("guide_product_id")
+                or app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
+            ):
                 schedule(db, current, "funnel.offer", now + 2)
     elif event == "funnel.offer":
         expires = d.get("offer_expires", now + 7200)
         if expires <= now:
             return
-        bot.send(
-            render_copy(snapshot["offer_text"], snapshot, account["name"], price=price),
+        buttons = (
             [
+                ("✅ Принять", "funnel_accept_dev", values),
+                ("❌ Отменить", "funnel_refuse", values),
+            ]
+            if dev_offer
+            else [
                 ("💳 Забрать руководство за " + price, "funnel_buy", values),
                 ("❌ Отказаться и закрыть доступ", "funnel_refuse", values),
-            ],
+            ]
+        )
+        bot.send(
+            render_copy(snapshot["offer_text"], snapshot, account["name"], price=price),
+            buttons,
         )
         with transaction(app.config["DATABASE"]) as db:
             current = object_get(db, id)
@@ -1285,7 +1377,14 @@ def notify_funnel(app, owner, id, event):
             with transaction(app.config["DATABASE"]) as db:
                 current = object_get(db, id)
                 update(db, current, now, {**current["data"], "guide_file_sent_at": now})
-        bot.send(render_copy(snapshot["success_text"], snapshot, account["name"]), consult)
+        bot.send(
+            (
+                "Тестовый PDF готов. Оплата не выполнялась."
+                if dev_delivery
+                else render_copy(snapshot["success_text"], snapshot, account["name"])
+            ),
+            consult,
+        )
         with transaction(app.config["DATABASE"]) as db:
             current = object_get(db, id)
             current = update(
