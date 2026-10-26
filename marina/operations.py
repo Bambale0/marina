@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 from flask import g
-from . import body, object_get, protected, reason, require
+from . import body, object_get, offset, protected, reason, require
 from .db import audit, connect, emit, insert, transaction, unpack, update
 
 
@@ -374,6 +374,7 @@ def register_operations(app):
     @app.get("/api/admin/operations")
     @protected(admin=True)
     def operations():
+        page_offset = offset()
         counts = [
             dict(r)
             for r in g.db.execute(
@@ -381,7 +382,11 @@ def register_operations(app):
             )
         ]
         outbox = [
-            dict(r) for r in g.db.execute("SELECT * FROM outbox ORDER BY created DESC LIMIT 100")
+            dict(r)
+            for r in g.db.execute(
+                "SELECT * FROM outbox ORDER BY created DESC,id DESC LIMIT 31 OFFSET ?",
+                (page_offset,),
+            )
         ]
         return {
             "metrics": counts,
@@ -398,6 +403,13 @@ def register_operations(app):
             },
             "now": g.now,
         }
+
+    @app.get("/api/admin/outbox/<id>")
+    @protected(admin=True)
+    def delivery(id):
+        row = g.db.execute("SELECT * FROM outbox WHERE id=?", (id,)).fetchone()
+        require(row, "Событие доставки не найдено", 404)
+        return dict(row)
 
     @app.get("/api/admin/queue")
     @protected(admin=True)

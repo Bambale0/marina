@@ -249,11 +249,11 @@ def test_telegram_admin_creates_approves_lists_and_audits_content(app):
         )
 
     message("/admin")
+    content_navigation = button("Контент и настройки")
     click(button("Трипваер"))
     assert "Трипваер" in sent[-1]["text"]
     assert "3–4 года: неполный комплект" in sent[-1]["text"]
-    click(button("В админку"))
-    click(button("Контент и настройки"))
+    click(content_navigation)
     click(button("Решения"))
     click(button("Создать"))
     message(
@@ -290,7 +290,7 @@ def test_telegram_admin_creates_approves_lists_and_audits_content(app):
     assert "Статус: approved" in sent[-1]["text"]
     click(button("Архивировать"))
     assert "причину" in sent[-1]["text"].lower()
-    message("/menu")
+    click(content_navigation)
     message("Этот текст не должен подтвердить скрытое действие")
 
     admin = login(app)
@@ -445,6 +445,14 @@ def test_telegram_admin_renders_and_uploads_material_assets(app):
     callback("admin_material_pdf", {"id": rendered["id"]})
     assert files[-1][1] == "manual-test.pdf"
     assert files[-1][2].startswith(b"%PDF")
+    callback("admin_content_action", {"id": rendered["id"], "command": "approve"})
+    message("Материал проверен специалистом")
+    labels = [value["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"] for value in row]
+    assert "Скачать PDF" in labels
+    assert "Опубликовать" in labels
+    callback("admin_content_action", {"id": rendered["id"], "command": "publish"})
+    message("Публикация проверенного материала")
+    assert admin.get("/api/admin/content/" + rendered["id"]).json["status"] == "published"
 
     callback("admin_asset_start", {"id": uploaded["id"]})
     message("Загрузить принадлежащий владельцу текстовый файл")
@@ -461,6 +469,51 @@ def test_telegram_admin_renders_and_uploads_material_assets(app):
     reasons = [item["reason"] for item in admin.get("/api/admin/audit").json["items"]]
     assert "Сформировать PDF из проверенного текста" in reasons
     assert "Загрузить принадлежащий владельцу текстовый файл" in reasons
+
+
+def test_telegram_admin_paginates_outbox_and_opens_older_event(app):
+    from marina.bot import Bot
+    from marina.db import emit, transaction
+    from tests.test_identity import login
+
+    owner, admin = login(app, 2), login(app)
+    owner_id = owner.get("/api/me").json["account"]["id"]
+    event_ids = []
+    with transaction(app.config["DATABASE"]) as db:
+        for index in range(35):
+            event = "test.event." + str(index)
+            emit(
+                db,
+                owner_id,
+                "object-" + str(index),
+                event,
+                app.clock[0] + index,
+            )
+            event_ids.append(
+                db.execute("SELECT id FROM outbox WHERE event=?", (event,)).fetchone()[0]
+            )
+
+    sent = []
+    app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: sent.append(data) or {
+        "ok": True,
+        "result": {},
+    }
+    bot = Bot(app, {"id": 1, "first_name": "Admin"}, 1, 9550)
+    bot.admin_operations()
+    labels = [value["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"] for value in row]
+    assert "Далее" in labels
+    assert "показаны 1–30" in sent[-1]["text"]
+
+    bot.action("admin_operations", {"offset": 30})
+    labels = [value["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"] for value in row]
+    assert "Назад" in labels
+    assert "Далее" not in labels
+    assert "показаны 31–35" in sent[-1]["text"]
+
+    assert owner.get("/api/admin/outbox/" + event_ids[0]).status_code == 403
+    assert admin.get("/api/admin/outbox/" + event_ids[0]).json["id"] == event_ids[0]
+    bot.admin_outbox_card(event_ids[0])
+    assert event_ids[0] in sent[-1]["text"]
 
 
 def test_telegram_admin_searches_related_objects_and_revokes_right(app):

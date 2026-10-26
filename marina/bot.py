@@ -145,6 +145,21 @@ class Bot:
             obj = object_get(db, self.state["id"])
             self.state = update(db, obj, self.now, {**obj["data"], **values})
 
+    def cancel_admin_prompt(self):
+        if not str(self.state["data"].get("step") or "").startswith("admin_"):
+            return
+        self.state_set(
+            step=None,
+            admin_pending=None,
+            admin_object_id=None,
+            admin_object_revision=None,
+            admin_kind=None,
+            admin_asset_reason=None,
+            object_id=None,
+            object_revision=None,
+            command=None,
+        )
+
     def keyboard(self, buttons):
         rows = []
         numbered = []
@@ -212,14 +227,7 @@ class Bot:
 
     def admin_menu(self):
         self.require_admin()
-        if str(self.state["data"].get("step") or "").startswith("admin_"):
-            self.state_set(
-                step=None,
-                admin_pending=None,
-                admin_object_id=None,
-                admin_object_revision=None,
-                admin_kind=None,
-            )
+        self.cancel_admin_prompt()
         return self.send(
             "Админка Марины в Telegram. Выберите раздел. Все изменения и чувствительные "
             "действия сохраняются с указанной вами причиной в неизменяемом журнале.",
@@ -323,7 +331,7 @@ class Bot:
             and o["data"].get("format") == "pdf"
         ):
             buttons.append(("Скачать PDF", "admin_material_pdf", {"id": id}))
-        elif o["status"] == "approved":
+        if o["status"] == "approved":
             buttons.append(
                 ("Опубликовать", "admin_content_action", {"id": id, "command": "publish"})
             )
@@ -428,13 +436,19 @@ class Bot:
         buttons.append(("В админку", "admin_menu", {}))
         return self.send("\n".join(lines), buttons)
 
-    def admin_operations(self):
+    def admin_operations(self, offset=0):
         self.require_admin()
-        data = self.api("/admin/operations")
+        offset = max(0, int(offset))
+        data = self.api("/admin/operations?offset=" + str(offset))
         lines = ["Операции и интеграции"]
         for key, configured in data["integrations"].items():
             lines.append(key + ": " + ("настроено" if configured else "не настроено"))
-        lines.append("Исходящие события: " + str(len(data["outbox"])))
+        lines.append(
+            "Исходящие события: показаны "
+            + str(offset + 1 if data["outbox"] else 0)
+            + "–"
+            + str(offset + min(30, len(data["outbox"])))
+        )
         buttons = [
             (
                 str(event["event"])[:36] + " · " + event["status"],
@@ -443,14 +457,16 @@ class Bot:
             )
             for event in data["outbox"][:30]
         ]
+        if offset:
+            buttons.append(("Назад", "admin_operations", {"offset": max(0, offset - 30)}))
+        if len(data["outbox"]) > 30:
+            buttons.append(("Далее", "admin_operations", {"offset": offset + 30}))
         buttons.append(("В админку", "admin_menu", {}))
         return self.send("\n".join(lines), buttons)
 
     def admin_outbox_card(self, id):
         self.require_admin()
-        data = self.api("/admin/operations")
-        event = next((item for item in data["outbox"] if item["id"] == id), None)
-        require(event, "Событие доставки не найдено", 404)
+        event = self.api("/admin/outbox/" + id)
         lines = [
             "Доставка " + event["event"],
             "Статус: " + event["status"],
@@ -782,6 +798,8 @@ class Bot:
     def action(self, action, d):
         from .funnel_bot import handle_action
 
+        if action.startswith("admin_") or action in ("menu", "queue"):
+            self.cancel_admin_prompt()
         if handle_action(self, action, d):
             return
         if action == "offer":
@@ -1582,7 +1600,7 @@ class Bot:
         elif action == "admin_tripwire":
             self.admin_tripwire()
         elif action == "admin_operations":
-            self.admin_operations()
+            self.admin_operations(d.get("offset", 0))
         elif action == "admin_outbox_card":
             self.admin_outbox_card(d["id"])
         elif action == "admin_outbox_attempts":
@@ -2134,16 +2152,7 @@ class Bot:
         text = message.get("text", "").strip()
         current_step = str(self.state["data"].get("step") or "")
         if text.startswith("/") and current_step.startswith("admin_"):
-            self.state_set(
-                step=None,
-                admin_pending=None,
-                admin_object_id=None,
-                admin_object_revision=None,
-                admin_kind=None,
-                object_id=None,
-                object_revision=None,
-                command=None,
-            )
+            self.cancel_admin_prompt()
         if text == "/offer":
             return self.action("offer", {})
         if text.startswith("/start"):
