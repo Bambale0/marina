@@ -339,7 +339,7 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     )
     ops = policies(db, "operations")
     require(not ops or not ops["data"].get("pause_sales"), "Приём новых заказов приостановлен")
-    policy = policies(db, "commerce", "guide") or policies(db, "commerce")
+    policy = policies(db, "commerce", "guide")
     require(policy, "Сначала утвердите правила покупки в админке")
     material, asset = material_asset(db, p["data"].get("material_id"))
     intent = idempotent(

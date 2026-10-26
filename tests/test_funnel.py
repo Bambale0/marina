@@ -169,7 +169,22 @@ def capture(app):
 def setup_sale(app, group="3-4", currency="XTR", **product_fields):
     app.config["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
     admin, owner = login(app), login(app, 2)
-    policy(admin)
+    offer = publish(
+        admin,
+        "template",
+        {"type": "offer", "text": "Synthetic owner-supplied offer"},
+    )
+    publish(
+        admin,
+        "policy",
+        {
+            "type": "commerce",
+            "scope": "guide",
+            "offer_template_id": offer["id"],
+            "quote_ttl_seconds": 900,
+            "late_payment": "review",
+        },
+    )
     base = scenario(admin, group)
     response = admin.post(
         f"/api/admin/funnels/{base['id']}/prepare-guide",
@@ -657,7 +672,6 @@ def test_admin_manages_offer_and_guide_purchase_policy_without_subscription_rule
     assert dashboard.json["policy"]["id"] == guide_policy["id"]
 
     owner = login(app, 2)
-    policy(admin)
     base = scenario(admin)
     material = approve_existing(
         admin,
