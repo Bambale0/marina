@@ -186,8 +186,10 @@ def test_polling_profile_and_private_identity(app):
     buttons = [row[0] for row in sent[-1][1]["reply_markup"]["inline_keyboard"]]
     assert [button["text"] for button in buttons] == [
         "Трипваер",
+        "Клиенты и доступ",
         "Контент и настройки",
         "Все сущности",
+        "Поиск сущности",
         "Очередь",
         "Операции и интеграции",
         "Журнал аудита",
@@ -286,6 +288,10 @@ def test_telegram_admin_creates_approves_lists_and_audits_content(app):
     assert "причину" in sent[-1]["text"].lower()
     message("Проверена специалистом перед публикацией")
     assert "Статус: approved" in sent[-1]["text"]
+    click(button("Архивировать"))
+    assert "причину" in sent[-1]["text"].lower()
+    message("/menu")
+    message("Этот текст не должен подтвердить скрытое действие")
 
     admin = login(app)
     decisions = admin.get("/api/admin/content?kind=decision&order=desc").json["items"]
@@ -300,6 +306,236 @@ def test_telegram_admin_creates_approves_lists_and_audits_content(app):
     click(button("В админку"))
     click(button("Журнал аудита"))
     assert "Проверена специалистом перед публикацией" in sent[-1]["text"]
+
+
+def test_telegram_admin_manages_account_access_with_reasons(app):
+    from tests.test_identity import login
+
+    owner, admin = login(app, 2), login(app)
+    account_id = owner.get("/api/me").json["account"]["id"]
+    sent = []
+    app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: sent.append(data) or {
+        "ok": True,
+        "result": {},
+    }
+    counter = iter(range(9200, 9300))
+
+    def message(text):
+        handle_update(
+            app,
+            {
+                "update_id": next(counter),
+                "message": {
+                    "from": {"id": 1, "first_name": "Admin"},
+                    "chat": {"id": 1, "type": "private"},
+                    "text": text,
+                },
+            },
+        )
+
+    def click(title):
+        value = next(
+            value
+            for row in sent[-1]["reply_markup"]["inline_keyboard"]
+            for value in row
+            if value["text"] == title
+        )
+        handle_update(
+            app,
+            {
+                "update_id": next(counter),
+                "callback_query": {
+                    "id": "account-callback",
+                    "from": {"id": 1, "first_name": "Admin"},
+                    "data": value["callback_data"],
+                    "message": {"chat": {"id": 1, "type": "private"}},
+                },
+            },
+        )
+
+    message("/admin")
+    click("Клиенты и доступ")
+    click("Найти клиента")
+    message(account_id)
+    click("User · активен")
+    assert account_id in sent[-1]["text"]
+    click("Ограничить вход")
+    message("Доступ ограничен по запросу владельца")
+    assert owner.get("/api/me").status_code == 403
+    click("Восстановить вход")
+    message("Владелец подтвердил восстановление")
+    assert owner.get("/api/me").status_code == 200
+    click("Отозвать сессии")
+    message("Плановая смена активных сессий")
+    assert owner.get("/api/me").status_code == 401
+    reasons = [item["reason"] for item in admin.get("/api/admin/audit").json["items"]]
+    assert "Доступ ограничен по запросу владельца" in reasons
+    assert "Владелец подтвердил восстановление" in reasons
+    assert "Плановая смена активных сессий" in reasons
+
+
+def test_telegram_admin_renders_and_uploads_material_assets(app):
+    from tests.test_identity import login
+
+    admin = login(app)
+    rendered = admin.post(
+        "/api/admin/content",
+        json={
+            "kind": "material",
+            "title": "Текстовый PDF",
+            "data": {
+                "owner": "specialist",
+                "status": "ready",
+                "source": "Owner text",
+                "rights": "Owned",
+                "text": "Базовый текст для ручного теста",
+                "filename": "manual-test.pdf",
+            },
+            "reason": "Подготовка исходника",
+        },
+    ).json
+    uploaded = admin.post(
+        "/api/admin/content",
+        json={
+            "kind": "material",
+            "title": "Загруженный файл",
+            "data": {
+                "owner": "specialist",
+                "status": "received",
+                "source": "Owner file",
+                "rights": "Owned",
+            },
+            "reason": "Подготовка загрузки",
+        },
+    ).json
+    sent, files = [], []
+
+    def transport(method, url, data, headers):
+        if url.endswith("/getFile"):
+            return {"ok": True, "result": {"file_path": "documents/material.txt"}}
+        sent.append(data)
+        return {"ok": True, "result": {}}
+
+    app.config["HTTP_TRANSPORT"] = transport
+    app.config["FILE_TRANSPORT"] = lambda *args: files.append(args)
+    app.config["TELEGRAM_FILE_TRANSPORT"] = lambda path, limit: b"Uploaded owner material"
+    counter = iter(range(9400, 9500))
+
+    def callback(action, data):
+        from marina.bot import Bot
+
+        Bot(app, {"id": 1, "first_name": "Admin"}, 1, next(counter)).action(action, data)
+
+    def message(text=None, document=None):
+        value = {
+            "from": {"id": 1, "first_name": "Admin"},
+            "chat": {"id": 1, "type": "private"},
+        }
+        if text is not None:
+            value["text"] = text
+        if document is not None:
+            value["document"] = document
+        handle_update(app, {"update_id": next(counter), "message": value})
+
+    callback("admin_material_render", {"id": rendered["id"]})
+    message("Сформировать PDF из проверенного текста")
+    current = admin.get("/api/admin/content/" + rendered["id"]).json
+    assert current["data"]["asset_id"]
+    assert admin.get("/api/admin/materials/" + rendered["id"] + "/pdf").data.startswith(b"%PDF")
+    callback("admin_material_pdf", {"id": rendered["id"]})
+    assert files[-1][1] == "manual-test.pdf"
+    assert files[-1][2].startswith(b"%PDF")
+
+    callback("admin_asset_start", {"id": uploaded["id"]})
+    message("Загрузить принадлежащий владельцу текстовый файл")
+    message(
+        document={
+            "file_id": "owner-material",
+            "file_size": 23,
+            "file_name": "material.txt",
+            "mime_type": "text/plain",
+        }
+    )
+    stored = admin.get("/api/admin/content/" + uploaded["id"]).json
+    assert stored["data"]["asset_id"]
+    reasons = [item["reason"] for item in admin.get("/api/admin/audit").json["items"]]
+    assert "Сформировать PDF из проверенного текста" in reasons
+    assert "Загрузить принадлежащий владельцу текстовый файл" in reasons
+
+
+def test_telegram_admin_searches_related_objects_and_revokes_right(app):
+    from marina.db import insert, transaction
+    from tests.test_identity import login
+
+    owner, admin = login(app, 2), login(app)
+    owner_id = owner.get("/api/me").json["account"]["id"]
+    with transaction(app.config["DATABASE"]) as db:
+        order = insert(
+            db, "order", {"title": "Связанный заказ"}, app.clock[0], owner_id, status="paid"
+        )
+        right = insert(
+            db,
+            "right",
+            {"service": "guide", "order_id": order["id"]},
+            app.clock[0],
+            owner_id,
+            status="active",
+        )
+    sent = []
+    app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: sent.append(data) or {
+        "ok": True,
+        "result": {},
+    }
+    counter = iter(range(9600, 9700))
+
+    def message(text):
+        handle_update(
+            app,
+            {
+                "update_id": next(counter),
+                "message": {
+                    "from": {"id": 1, "first_name": "Admin"},
+                    "chat": {"id": 1, "type": "private"},
+                    "text": text,
+                },
+            },
+        )
+
+    def click(title):
+        value = next(
+            value
+            for row in sent[-1]["reply_markup"]["inline_keyboard"]
+            for value in row
+            if value["text"] == title
+        )
+        handle_update(
+            app,
+            {
+                "update_id": next(counter),
+                "callback_query": {
+                    "id": "object-callback",
+                    "from": {"id": 1, "first_name": "Admin"},
+                    "data": value["callback_data"],
+                    "message": {"chat": {"id": 1, "type": "private"}},
+                },
+            },
+        )
+
+    message("/admin")
+    click("Поиск сущности")
+    message(right["id"])
+    labels = [value["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"] for value in row]
+    assert "Отозвать право" in labels
+    assert "Аккаунт владельца" in labels
+    assert "Открыть order_id" in labels
+    click("Отозвать право")
+    message("Компенсационное право выдано ошибочно")
+    stored = admin.get("/api/admin/objects/" + right["id"]).json["object"]
+    assert stored["status"] == "revoked"
+    assert (
+        admin.get("/api/admin/audit?object_id=" + right["id"]).json["items"][-1]["reason"]
+        == "Компенсационное право выдано ошибочно"
+    )
 
 
 @pytest.mark.parametrize(

@@ -412,11 +412,14 @@ def create_app(config=None):
     @protected(admin=True)
     def accounts():
         term = "%" + request.args.get("q", "")[:100] + "%"
+        order = "DESC" if request.args.get("order") == "desc" else "ASC"
         return {
             "items": [
                 dict(r)
                 for r in g.db.execute(
-                    "SELECT * FROM accounts WHERE name LIKE ? OR id LIKE ? ORDER BY created LIMIT 100 OFFSET ?",
+                    "SELECT * FROM accounts WHERE name LIKE ? OR id LIKE ? ORDER BY created "
+                    + order
+                    + " LIMIT 100 OFFSET ?",
                     (term, term, offset()),
                 )
             ]
