@@ -97,10 +97,15 @@ def register_content(app):
     def list_content():
         kind = request.args.get("kind")
         term = "%" + request.args.get("q", "")[:100] + "%"
+        order = "DESC" if request.args.get("order") == "desc" else "ASC"
         rows = g.db.execute(
             "SELECT * FROM objects WHERE kind IN ("
             + ",".join("?" for _ in KINDS)
-            + ") AND status!='deleted' AND (? IS NULL OR kind=?) AND data LIKE ? ORDER BY created,id LIMIT 100 OFFSET ?",
+            + ") AND status!='deleted' AND (? IS NULL OR kind=?) AND data LIKE ? ORDER BY created "
+            + order
+            + ",id "
+            + order
+            + " LIMIT 100 OFFSET ?",
             (*sorted(KINDS), kind, kind, term, offset()),
         )
         return {"items": [unpack(r) for r in rows]}

@@ -5,6 +5,7 @@ import io
 import json
 import secrets
 import time
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from . import Problem, age_months, object_get, require
@@ -24,6 +25,61 @@ MENU = [
     ("Мои обращения", "history", {}),
     ("Оферта", "offer", {}),
 ]
+
+ADMIN_CONTENT_KINDS = [
+    ("Сценарии", "funnel"),
+    ("Онбординг", "onboarding"),
+    ("Решения", "decision"),
+    ("PDF и материалы", "material"),
+    ("Методики", "method"),
+    ("Тарифы и продукты", "product"),
+    ("Правила", "policy"),
+    ("Упражнения", "exercise"),
+    ("Подборки", "selection"),
+    ("Курсы", "course"),
+    ("Шаблоны и оферта", "template"),
+]
+
+ADMIN_KIND_LABELS = {
+    **{kind: title for title, kind in ADMIN_CONTENT_KINDS},
+    "account": "Аккаунты",
+    "booking": "Записи",
+    "case": "Разборы",
+    "funnel_run": "Запуски сценариев",
+    "order": "Заказы",
+    "payment_attempt": "Попытки оплаты",
+    "payment_event": "События оплаты",
+    "purchase_intent": "Намерения покупки",
+    "quote": "Расчёты",
+    "reconciliation": "Сверки",
+    "refund": "Возвраты",
+    "report": "Отчёты",
+    "right": "Права доступа",
+    "video_review": "Видеоразборы",
+}
+
+RELATED_OBJECT_KEYS = {
+    "attempt_id",
+    "booking_id",
+    "case_id",
+    "course_id",
+    "funnel_id",
+    "guide_right_id",
+    "material_id",
+    "media_id",
+    "method_id",
+    "order_id",
+    "payment_attempt_id",
+    "payment_event_id",
+    "policy_id",
+    "product_id",
+    "quote_id",
+    "refund_id",
+    "report_id",
+    "right_id",
+    "subject_id",
+    "template_id",
+}
 
 
 def trusted_client(app, user):
@@ -89,6 +145,21 @@ class Bot:
             obj = object_get(db, self.state["id"])
             self.state = update(db, obj, self.now, {**obj["data"], **values})
 
+    def cancel_admin_prompt(self):
+        if not str(self.state["data"].get("step") or "").startswith("admin_"):
+            return
+        self.state_set(
+            step=None,
+            admin_pending=None,
+            admin_object_id=None,
+            admin_object_revision=None,
+            admin_kind=None,
+            admin_asset_reason=None,
+            object_id=None,
+            object_revision=None,
+            command=None,
+        )
+
     def keyboard(self, buttons):
         rows = []
         numbered = []
@@ -110,10 +181,6 @@ class Bot:
                 if action == "url":
                     flush_numbered()
                     rows.append([{"text": title, "url": data["url"]}])
-                    continue
-                if action == "web_app":
-                    flush_numbered()
-                    rows.append([{"text": title, "web_app": {"url": data["url"]}}])
                     continue
                 obj = insert(
                     db,
@@ -150,6 +217,406 @@ class Bot:
         if buttons:
             data["reply_markup"] = self.keyboard(buttons)
         return telegram(self.app, "editMessageText", data)
+
+    def require_admin(self):
+        require(
+            self.user["id"] in self.app.config["ADMIN_TELEGRAM_IDS"],
+            "Недостаточно прав",
+            403,
+        )
+
+    def admin_menu(self):
+        self.require_admin()
+        self.cancel_admin_prompt()
+        return self.send(
+            "Админка Марины в Telegram. Выберите раздел. Все изменения и чувствительные "
+            "действия сохраняются с указанной вами причиной в неизменяемом журнале.",
+            [
+                ("Трипваер", "admin_tripwire", {}),
+                ("Клиенты и доступ", "admin_accounts", {}),
+                ("Контент и настройки", "admin_content_kinds", {}),
+                ("Все сущности", "admin_entities", {}),
+                ("Поиск сущности", "admin_search_start", {}),
+                ("Очередь", "queue", {}),
+                ("Операции и интеграции", "admin_operations", {}),
+                ("Журнал аудита", "admin_audit", {}),
+            ],
+        )
+
+    def admin_content_kinds(self):
+        self.require_admin()
+        return self.send(
+            "Контент и настройки. Значения читаются из сущностей, а не из меню бота.",
+            [(title, "admin_content_list", {"kind": kind}) for title, kind in ADMIN_CONTENT_KINDS]
+            + [("В админку", "admin_menu", {})],
+        )
+
+    def admin_content_list(self, kind, offset=0):
+        self.require_admin()
+        allowed = {value for _, value in ADMIN_CONTENT_KINDS}
+        require(kind in allowed, "Неизвестный тип сущности")
+        offset = max(0, int(offset))
+        items = self.api("/admin/content?kind=" + kind + "&order=desc&offset=" + str(offset))[
+            "items"
+        ]
+        title = ADMIN_KIND_LABELS[kind]
+        buttons = [
+            (
+                str(o["data"].get("title") or o["id"])[:48] + " · " + o["status"],
+                "admin_content_card",
+                {"id": o["id"]},
+            )
+            for o in items[:30]
+        ]
+        if offset:
+            buttons.append(
+                ("Назад", "admin_content_list", {"kind": kind, "offset": max(0, offset - 30)})
+            )
+        if len(items) > 30:
+            buttons.append(("Далее", "admin_content_list", {"kind": kind, "offset": offset + 30}))
+        buttons += [
+            ("Создать", "admin_content_create", {"kind": kind}),
+            ("К разделам", "admin_content_kinds", {}),
+            ("В админку", "admin_menu", {}),
+        ]
+        return self.send(
+            title
+            + ". Показаны записи "
+            + str(offset + 1 if items else 0)
+            + "–"
+            + str(offset + min(30, len(items)))
+            + ".",
+            buttons,
+        )
+
+    def admin_content_card(self, id):
+        self.require_admin()
+        o = self.api("/admin/content/" + id)
+        title = str(o["data"].get("title") or "Без названия")
+        text = (
+            ADMIN_KIND_LABELS.get(o["kind"], o["kind"])
+            + "\n"
+            + title
+            + "\nСтатус: "
+            + o["status"]
+            + "\nРедакция: "
+            + str(o["revision"])
+            + "\nID: "
+            + o["id"]
+        )
+        buttons = [("Скачать JSON", "admin_content_export", {"id": id})]
+        buttons.append(("Предпросмотр", "admin_content_preview", {"id": id}))
+        if o["status"] == "draft":
+            buttons += [
+                ("Изменить JSON", "admin_content_edit", {"id": id}),
+                ("Утвердить", "admin_content_action", {"id": id, "command": "approve"}),
+                ("Удалить черновик", "admin_content_action", {"id": id, "command": "delete"}),
+            ]
+            if o["kind"] in ("material", "exercise"):
+                buttons.append(("Загрузить файл", "admin_asset_start", {"id": id}))
+            if o["kind"] == "material" and o["data"].get("text"):
+                buttons.append(("Сформировать PDF", "admin_material_render", {"id": id}))
+            if o["kind"] == "exercise" and o["data"].get("video_id"):
+                buttons += [
+                    (
+                        "Скачать видео для проверки",
+                        "admin_content_asset_download",
+                        {"id": id, "asset_id": o["data"]["video_id"]},
+                    ),
+                    ("Подтвердить просмотр видео", "admin_exercise_verify", {"id": id}),
+                ]
+        if (
+            o["kind"] == "material"
+            and o["data"].get("asset_id")
+            and o["data"].get("format") == "pdf"
+        ):
+            buttons.append(("Скачать PDF", "admin_material_pdf", {"id": id}))
+        if o["status"] == "approved":
+            buttons.append(
+                ("Опубликовать", "admin_content_action", {"id": id, "command": "publish"})
+            )
+        if o["status"] != "draft":
+            buttons.append(("Новая версия", "admin_content_action", {"id": id, "command": "copy"}))
+        if o["status"] not in ("archived", "deleted"):
+            buttons.append(
+                ("Архивировать", "admin_content_action", {"id": id, "command": "archive"})
+            )
+        buttons += [
+            ("К списку", "admin_content_list", {"kind": o["kind"]}),
+            ("В админку", "admin_menu", {}),
+        ]
+        return self.send(text, buttons)
+
+    def admin_entity_list(self, kind, offset=0):
+        self.require_admin()
+        offset = max(0, int(offset))
+        items = self.api("/admin/objects?kind=" + kind + "&order=desc&offset=" + str(offset))[
+            "items"
+        ]
+        buttons = [
+            (
+                str(o["data"].get("title") or o["data"].get("topic") or o["id"])[:48]
+                + " · "
+                + o["status"],
+                "admin_entity_card",
+                {"id": o["id"]},
+            )
+            for o in items[:30]
+        ]
+        if offset:
+            buttons.append(
+                ("Назад", "admin_entity_list", {"kind": kind, "offset": max(0, offset - 30)})
+            )
+        if len(items) > 30:
+            buttons.append(("Далее", "admin_entity_list", {"kind": kind, "offset": offset + 30}))
+        buttons.append(("Все сущности", "admin_entities", {}))
+        return self.send(
+            ADMIN_KIND_LABELS.get(kind, kind)
+            + ". Показаны записи "
+            + str(offset + 1 if items else 0)
+            + "–"
+            + str(offset + min(30, len(items)))
+            + ".",
+            buttons,
+        )
+
+    def admin_entity_card(self, id):
+        self.require_admin()
+        o = self.api("/admin/objects/" + id)["object"]
+        if o["kind"] in {value for _, value in ADMIN_CONTENT_KINDS}:
+            return self.admin_content_card(id)
+        return self.admin_card(id)
+
+    def admin_tripwire(self):
+        self.require_admin()
+        data = self.api("/admin/tripwire")
+
+        def yes(value):
+            return "да" if value else "нет"
+
+        lines = [
+            "Трипваер",
+            "Lava API: " + yes(data["integrations"]["lava_api"]),
+            "Lava webhook: " + yes(data["integrations"]["lava_webhook"]),
+            "Dev-оплата: " + yes(data["integrations"]["external_lava_test_mode"]),
+            "Оферта: " + (data["offer"]["title"] if data.get("offer") else "не опубликована"),
+            "Правила покупки: "
+            + (data["policy"]["title"] if data.get("policy") else "не опубликованы"),
+        ]
+        buttons = []
+        if data.get("offer"):
+            buttons.append(("Оферта", "admin_content_card", {"id": data["offer"]["id"]}))
+        if data.get("policy"):
+            buttons.append(("Правила покупки", "admin_content_card", {"id": data["policy"]["id"]}))
+        for group in data["groups"]:
+            funnel, product, material = (
+                group.get("funnel"),
+                group.get("product"),
+                group.get("material"),
+            )
+            ready = bool(
+                funnel
+                and funnel["status"] == "published"
+                and product
+                and product["status"] == "published"
+                and material
+                and material["status"] == "published"
+                and material["asset_configured"]
+            )
+            lines.append(group["label"] + ": " + ("готово" if ready else "неполный комплект"))
+            for key, label in (("funnel", "сценарий"), ("product", "тариф"), ("material", "PDF")):
+                if group.get(key):
+                    buttons.append(
+                        (
+                            group["label"] + " · " + label,
+                            "admin_content_card",
+                            {"id": group[key]["id"]},
+                        )
+                    )
+        buttons.append(("В админку", "admin_menu", {}))
+        return self.send("\n".join(lines), buttons)
+
+    def admin_operations(self, offset=0):
+        self.require_admin()
+        offset = max(0, int(offset))
+        data = self.api("/admin/operations?offset=" + str(offset))
+        lines = ["Операции и интеграции"]
+        for key, configured in data["integrations"].items():
+            lines.append(key + ": " + ("настроено" if configured else "не настроено"))
+        lines.append(
+            "Исходящие события: показаны "
+            + str(offset + 1 if data["outbox"] else 0)
+            + "–"
+            + str(offset + min(30, len(data["outbox"])))
+        )
+        buttons = [
+            (
+                str(event["event"])[:36] + " · " + event["status"],
+                "admin_outbox_card",
+                {"id": event["id"]},
+            )
+            for event in data["outbox"][:30]
+        ]
+        if offset:
+            buttons.append(("Назад", "admin_operations", {"offset": max(0, offset - 30)}))
+        if len(data["outbox"]) > 30:
+            buttons.append(("Далее", "admin_operations", {"offset": offset + 30}))
+        buttons.append(("В админку", "admin_menu", {}))
+        return self.send("\n".join(lines), buttons)
+
+    def admin_outbox_card(self, id):
+        self.require_admin()
+        event = self.api("/admin/outbox/" + id)
+        lines = [
+            "Доставка " + event["event"],
+            "Статус: " + event["status"],
+            "Попыток: " + str(event["attempts"]),
+            "ID: " + event["id"],
+        ]
+        buttons = [
+            ("Открыть исходный объект", "admin_entity_card", {"id": event["object_id"]}),
+            ("История попыток", "admin_outbox_attempts", {"id": event["id"]}),
+        ]
+        if event["event"] not in ("invoice.create", "refund.create") and event["status"] in (
+            "sent",
+            "failed",
+        ):
+            buttons.append(("Повторить доставку", "admin_outbox_retry", {"id": event["id"]}))
+        buttons += [
+            ("К операциям", "admin_operations", {}),
+            ("В админку", "admin_menu", {}),
+        ]
+        return self.send("\n".join(lines), buttons)
+
+    def admin_audit(self, offset=0):
+        self.require_admin()
+        offset = max(0, int(offset))
+        items = self.api("/admin/audit?order=desc&offset=" + str(offset))["items"]
+        lines = ["Последние действия в журнале аудита:"]
+        for item in items[:15]:
+            lines.append(
+                str(item["id"])
+                + " · "
+                + item["action"]
+                + " · "
+                + str(item.get("reason") or "без причины")
+                + "\n"
+                + str(item.get("object_id") or "")
+            )
+        if not items:
+            lines.append("Журнал пуст.")
+        buttons = []
+        if offset:
+            buttons.append(("Назад", "admin_audit", {"offset": max(0, offset - 15)}))
+        if len(items) > 15:
+            buttons.append(("Далее", "admin_audit", {"offset": offset + 15}))
+        buttons.append(("В админку", "admin_menu", {}))
+        return self.send("\n\n".join(lines), buttons)
+
+    def admin_accounts(self, offset=0, query=""):
+        self.require_admin()
+        offset = max(0, int(offset))
+        query = str(query)[:100]
+        path = "/admin/accounts?" + urlencode({"q": query, "offset": offset, "order": "desc"})
+        items = self.api(path)["items"]
+        buttons = [
+            (
+                str(account.get("name") or account["id"])[:48]
+                + (" · ограничен" if account.get("blocked") else " · активен"),
+                "admin_account_card",
+                {"id": account["id"]},
+            )
+            for account in items[:30]
+        ]
+        if offset:
+            buttons.append(
+                (
+                    "Назад",
+                    "admin_accounts",
+                    {"offset": max(0, offset - 30), "query": query},
+                )
+            )
+        if len(items) > 30:
+            buttons.append(("Далее", "admin_accounts", {"offset": offset + 30, "query": query}))
+        buttons += [
+            ("Найти клиента", "admin_account_search", {}),
+            ("В админку", "admin_menu", {}),
+        ]
+        return self.send("Клиенты. Показано: " + str(min(30, len(items))) + ".", buttons)
+
+    def admin_account_card(self, id):
+        self.require_admin()
+        card = self.api("/admin/accounts/" + id)
+        account = card["account"]
+        lines = [
+            "Клиент: " + str(account.get("name") or "Без имени"),
+            "Статус: " + ("ограничен" if account.get("blocked") else "активен"),
+            "Telegram ID: " + str(account["telegram_id"]),
+            "Активных сессий: "
+            + str(sum(1 for session in card["sessions"] if not session["revoked"])),
+            "Объектов: " + str(len(card["objects"])),
+            "ID: " + account["id"],
+        ]
+        buttons = [
+            (
+                str(o["data"].get("title") or o["data"].get("name") or o["kind"])[:48]
+                + " · "
+                + o["status"],
+                "admin_entity_card",
+                {"id": o["id"]},
+            )
+            for o in card["objects"][:30]
+        ]
+        buttons += [
+            (
+                "Восстановить вход" if account.get("blocked") else "Ограничить вход",
+                "admin_account_action",
+                {"id": account["id"], "command": "restore" if account.get("blocked") else "block"},
+            ),
+            (
+                "Отозвать сессии",
+                "admin_account_action",
+                {"id": account["id"], "command": "revoke-sessions"},
+            ),
+            ("К клиентам", "admin_accounts", {}),
+            ("В админку", "admin_menu", {}),
+        ]
+        return self.send("\n".join(lines), buttons)
+
+    def admin_document(self, message, limit):
+        document = message.get("document")
+        require(document, "Отправьте документ")
+        require(document.get("file_size", 0) <= limit, "Файл превышает допустимый размер")
+        info = telegram(self.app, "getFile", {"file_id": document["file_id"]})
+        path = info.get("file_path", "")
+        require(path and ".." not in path and not path.startswith("/"), "Не удалось прочитать файл")
+        try:
+            if self.app.config.get("TELEGRAM_FILE_TRANSPORT"):
+                content = self.app.config["TELEGRAM_FILE_TRANSPORT"](path, limit)
+            else:
+                with urlopen(
+                    "https://api.telegram.org/file/bot" + self.app.config["BOT_TOKEN"] + "/" + path,
+                    timeout=20,
+                ) as response:
+                    content = response.read(limit + 1)
+        except Exception:
+            raise Problem("Не удалось скачать файл") from None
+        require(0 < len(content) <= limit, "Файл превышает допустимый размер")
+        return (
+            content,
+            str(document.get("mime_type") or "application/octet-stream"),
+            str(document.get("file_name") or "document"),
+        )
+
+    def admin_payload_text(self, message):
+        text = message.get("text", "").strip()
+        if text:
+            return text
+        content, _, _ = self.admin_document(message, 1024 * 1024)
+        try:
+            return content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise Problem("JSON-файл должен быть в UTF-8") from None
 
     def funnel_age_buttons(self, entry_id):
         from .funnel_bot import age_buttons
@@ -331,6 +798,8 @@ class Bot:
     def action(self, action, d):
         from .funnel_bot import handle_action
 
+        if action.startswith("admin_") or action in ("menu", "queue"):
+            self.cancel_admin_prompt()
         if handle_action(self, action, d):
             return
         if action == "offer":
@@ -852,7 +1321,311 @@ class Bot:
                 {"proposal_id": d["proposal_id"]},
             )
             self.send("Время подтверждено.", MENU)
+        elif action == "admin_menu":
+            self.admin_menu()
+        elif action == "admin_content_kinds":
+            self.admin_content_kinds()
+        elif action == "admin_content_list":
+            self.admin_content_list(d["kind"], d.get("offset", 0))
+        elif action == "admin_content_card":
+            self.admin_content_card(d["id"])
+        elif action == "admin_content_export":
+            self.require_admin()
+            o = self.api("/admin/content/" + d["id"])
+            send_file(
+                self.app,
+                self.chat,
+                o["kind"] + "-" + o["id"] + ".json",
+                json.dumps(
+                    {"title": o["data"].get("title", ""), "data": o["data"]},
+                    ensure_ascii=False,
+                    indent=2,
+                ).encode("utf-8"),
+                "application/json",
+            )
+            self.admin_content_card(o["id"])
+        elif action == "admin_content_preview":
+            self.require_admin()
+            o = self.api("/admin/content/" + d["id"])
+            preview = self.api("/admin/content/" + o["id"] + "/preview")
+            send_file(
+                self.app,
+                self.chat,
+                o["kind"] + "-" + o["id"] + "-preview.json",
+                json.dumps(preview, ensure_ascii=False, indent=2).encode("utf-8"),
+                "application/json",
+            )
+            self.admin_content_card(o["id"])
+        elif action == "admin_content_create":
+            self.require_admin()
+            require(
+                d["kind"] in {value for _, value in ADMIN_CONTENT_KINDS},
+                "Неизвестный тип сущности",
+            )
+            self.state_set(step="admin_content_create_payload", admin_kind=d["kind"])
+            self.send(
+                "Отправьте JSON текстом или файлом .json: "
+                '{"title":"Название","data":{...}}. Затем бот отдельно запросит причину.'
+            )
+        elif action == "admin_content_edit":
+            self.require_admin()
+            o = self.api("/admin/content/" + d["id"])
+            require(o["status"] == "draft", "Изменять можно только черновик")
+            self.state_set(
+                step="admin_content_edit_payload",
+                admin_object_id=o["id"],
+                admin_object_revision=o["revision"],
+            )
+            self.send(
+                "Отправьте полную новую редакцию JSON текстом или файлом .json: "
+                '{"title":"Название","data":{...}}. Затем бот отдельно запросит причину.'
+            )
+        elif action == "admin_content_action":
+            self.require_admin()
+            require(
+                d["command"] in ("copy", "approve", "publish", "archive", "delete"),
+                "Действие недоступно",
+            )
+            current = self.api("/admin/content/" + d["id"])
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "content_action",
+                    "id": current["id"],
+                    "revision": current["revision"],
+                    "command": d["command"],
+                },
+            )
+            self.send("Укажите причину действия. Она сохранится в журнале аудита.")
+        elif action == "admin_asset_start":
+            self.require_admin()
+            current = self.api("/admin/content/" + d["id"])
+            require(
+                current["kind"] in ("exercise", "material") and current["status"] == "draft",
+                "Файл можно добавить только к черновику материала или упражнения",
+            )
+            self.state_set(
+                step="admin_asset_reason",
+                admin_pending={
+                    "type": "content_asset",
+                    "id": current["id"],
+                    "kind": current["kind"],
+                    "revision": current["revision"],
+                },
+            )
+            self.send("Сначала укажите причину загрузки файла.")
+        elif action == "admin_material_render":
+            self.require_admin()
+            current = self.api("/admin/content/" + d["id"])
+            require(current["kind"] == "material", "Материал не найден")
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "material_render",
+                    "id": current["id"],
+                    "revision": current["revision"],
+                },
+            )
+            self.send("Укажите причину формирования PDF. Она сохранится в аудите.")
+        elif action == "admin_material_pdf":
+            self.require_admin()
+            current = self.api("/admin/content/" + d["id"])
+            require(current["kind"] == "material", "Материал не найден")
+            response = self.client.get("/api/admin/materials/" + current["id"] + "/pdf")
+            require(response.status_code == 200, "PDF не прикреплён")
+            send_file(
+                self.app,
+                self.chat,
+                str(current["data"].get("filename") or "material.pdf"),
+                response.data,
+                "application/pdf",
+            )
+            self.admin_content_card(current["id"])
+        elif action == "admin_content_asset_download":
+            self.require_admin()
+            current = self.api("/admin/content/" + d["id"])
+            require(
+                current["kind"] == "exercise" and current["data"].get("video_id") == d["asset_id"],
+                "Видео не относится к этой редакции упражнения",
+            )
+            response = self.client.get("/api/media/" + d["asset_id"])
+            require(response.status_code == 200, "Файл недоступен")
+            send_file(
+                self.app,
+                self.chat,
+                "exercise.mp4",
+                response.data,
+                response.content_type or "video/mp4",
+                "sendVideo",
+            )
+            self.admin_content_card(current["id"])
+        elif action == "admin_exercise_verify":
+            self.require_admin()
+            current = self.api("/admin/content/" + d["id"])
+            require(
+                current["kind"] == "exercise"
+                and current["status"] == "draft"
+                and current["data"].get("video_id"),
+                "Сначала загрузите видео упражнения",
+            )
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "content_patch",
+                    "id": current["id"],
+                    "revision": current["revision"],
+                    "title": current["data"].get("title", ""),
+                    "data": {**current["data"], "video_verified": True},
+                },
+            )
+            self.send("Укажите причину подтверждения просмотра видео.")
+        elif action == "admin_accounts":
+            self.admin_accounts(d.get("offset", 0), d.get("query", ""))
+        elif action == "admin_account_card":
+            self.admin_account_card(d["id"])
+        elif action == "admin_account_search":
+            self.require_admin()
+            self.state_set(step="admin_account_search")
+            self.send("Введите имя клиента или ID аккаунта.")
+        elif action == "admin_account_action":
+            self.require_admin()
+            require(d["command"] in ("block", "restore", "revoke-sessions"), "Действие недоступно")
+            self.api("/admin/accounts/" + d["id"])
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "account_action",
+                    "id": d["id"],
+                    "command": d["command"],
+                },
+            )
+            self.send("Укажите причину действия с доступом клиента.")
+        elif action == "admin_search_start":
+            self.require_admin()
+            self.state_set(step="admin_search")
+            self.send(
+                "Отправьте точный ID сущности или JSON-фильтр: "
+                '{"kind":"order","status":"pending","owner":"ID"}. '
+                'Для контента можно передать {"kind":"material","q":"текст"}.'
+            )
+        elif action == "admin_entities":
+            self.require_admin()
+            metrics = self.api("/admin/operations")["metrics"]
+            internal = {"bot_callback", "bot_state", "idempotency"}
+            counts = {}
+            for item in metrics:
+                if item["kind"] not in internal:
+                    counts[item["kind"]] = counts.get(item["kind"], 0) + item["count"]
+            lines = ["Все доменные сущности:"] + [
+                ADMIN_KIND_LABELS.get(kind, kind) + ": " + str(count)
+                for kind, count in sorted(counts.items())
+            ]
+            buttons = [
+                (
+                    ADMIN_KIND_LABELS.get(kind, kind) + " · " + str(count),
+                    "admin_entity_list",
+                    {"kind": kind},
+                )
+                for kind, count in sorted(counts.items())[:50]
+            ]
+            buttons.append(("В админку", "admin_menu", {}))
+            self.send("\n".join(lines), buttons)
+        elif action == "admin_entity_list":
+            self.admin_entity_list(d["kind"], d.get("offset", 0))
+        elif action == "admin_entity_card":
+            self.admin_entity_card(d["id"])
+        elif action == "admin_object_export":
+            self.require_admin()
+            card = self.api("/admin/objects/" + d["id"])
+            o = card["object"]
+            send_file(
+                self.app,
+                self.chat,
+                o["kind"] + "-" + o["id"] + ".json",
+                json.dumps(card, ensure_ascii=False, indent=2).encode("utf-8"),
+                "application/json",
+            )
+            self.admin_entity_card(o["id"])
+        elif action == "admin_object_versions":
+            self.require_admin()
+            o = self.api("/admin/objects/" + d["id"])["object"]
+            versions = self.api("/admin/objects/" + o["id"] + "/versions")["items"]
+            send_file(
+                self.app,
+                self.chat,
+                o["kind"] + "-" + o["id"] + "-versions.json",
+                json.dumps(versions, ensure_ascii=False, indent=2).encode("utf-8"),
+                "application/json",
+            )
+            self.admin_entity_card(o["id"])
+        elif action == "admin_object_audit":
+            self.require_admin()
+            o = self.api("/admin/objects/" + d["id"])["object"]
+            offset = max(0, int(d.get("offset", 0)))
+            items = self.api(
+                "/admin/audit?object_id=" + o["id"] + "&order=desc&offset=" + str(offset)
+            )["items"]
+            lines = ["Аудит объекта " + o["id"]]
+            for item in items[:30]:
+                lines.append(
+                    str(item["id"])
+                    + " · "
+                    + item["action"]
+                    + " · "
+                    + str(item.get("reason") or "без причины")
+                )
+            if not items:
+                lines.append("Записей нет.")
+            buttons = []
+            if offset:
+                buttons.append(
+                    (
+                        "Назад",
+                        "admin_object_audit",
+                        {"id": o["id"], "offset": max(0, offset - 30)},
+                    )
+                )
+            if len(items) > 30:
+                buttons.append(
+                    ("Далее", "admin_object_audit", {"id": o["id"], "offset": offset + 30})
+                )
+            buttons += [
+                ("К карточке", "admin_entity_card", {"id": o["id"]}),
+                ("В админку", "admin_menu", {}),
+            ]
+            self.send(
+                "\n\n".join(lines),
+                buttons,
+            )
+        elif action == "admin_tripwire":
+            self.admin_tripwire()
+        elif action == "admin_operations":
+            self.admin_operations(d.get("offset", 0))
+        elif action == "admin_outbox_card":
+            self.admin_outbox_card(d["id"])
+        elif action == "admin_outbox_attempts":
+            self.require_admin()
+            items = self.api("/admin/outbox/" + d["id"] + "/attempts")["items"]
+            send_file(
+                self.app,
+                self.chat,
+                "delivery-" + d["id"] + "-attempts.json",
+                json.dumps(items, ensure_ascii=False, indent=2).encode("utf-8"),
+                "application/json",
+            )
+            self.admin_outbox_card(d["id"])
+        elif action == "admin_outbox_retry":
+            self.require_admin()
+            self.admin_outbox_card(d["id"])
+            self.state_set(
+                step="admin_reason",
+                admin_pending={"type": "outbox_retry", "id": d["id"]},
+            )
+            self.send("Укажите причину повторной доставки.")
+        elif action == "admin_audit":
+            self.admin_audit(d.get("offset", 0))
         elif action == "queue":
+            self.require_admin()
             items = self.api("/admin/queue")["items"]
             self.send(
                 "Очередь специалиста." if items else "Очередь пуста.",
@@ -862,23 +1635,121 @@ class Bot:
                 ],
             )
         elif action == "admin_card":
+            self.require_admin()
             self.admin_card(d["id"])
         elif action == "admin_text":
-            self.state_set(step="admin_text", object_id=d["id"], command=d["command"])
-            self.send("Введите текст. Он сохранится как новая редакция или ответ с аудитом.")
-        elif action == "admin_command":
-            o = self.api("/admin/objects/" + d["id"])["object"]
-            payload = {
-                "revision": o["revision"],
-                "reason": "Действие специалиста через Telegram",
-                "text_revision": len(o["data"].get("revisions", [])),
-            }
-            self.api(
-                "/admin/" + d["route"] + "/" + d["id"] + "/" + d["command"],
-                "POST",
-                payload,
+            self.require_admin()
+            current = self.api("/admin/objects/" + d["id"])["object"]
+            self.state_set(
+                step="admin_text",
+                object_id=current["id"],
+                object_revision=current["revision"],
+                command=d["command"],
             )
-            self.admin_card(d["id"])
+            self.send("Введите текст. После этого бот отдельно запросит причину действия.")
+        elif action == "admin_object_input":
+            self.require_admin()
+            require(d["form"] in ("booking", "text", "provider_id"), "Форма недоступна")
+            current = self.api("/admin/objects/" + d["id"])["object"]
+            self.state_set(
+                step="admin_object_input",
+                admin_pending={
+                    "type": "object_action_extra",
+                    "id": current["id"],
+                    "revision": current["revision"],
+                    "route": d["route"],
+                    "command": d["command"],
+                    "form": d["form"],
+                },
+            )
+            if d["form"] == "booking":
+                self.send(
+                    "Отправьте JSON: "
+                    '{"starts":1893456000,"duration_minutes":60,"timezone":"Europe/Moscow"}'
+                )
+            elif d["form"] == "provider_id":
+                self.send("Введите ID внешнего счёта Lava.top.")
+            else:
+                self.send("Введите текст или HTTPS-ссылку для операции.")
+        elif action == "admin_refund":
+            self.require_admin()
+            current = self.api("/admin/objects/" + d["id"])["object"]
+            require(current["kind"] == "order", "Заказ не найден")
+            require(current["revision"] == d["revision"], "Заказ изменён", 409)
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "refund",
+                    "id": current["id"],
+                    "revision": current["revision"],
+                    "charge": d["charge"],
+                    "amount": d["amount"],
+                },
+            )
+            self.send("Укажите причину полного возврата. Операция будет записана в аудит.")
+        elif action == "admin_command_data":
+            self.require_admin()
+            current = self.api("/admin/objects/" + d["id"])["object"]
+            require(isinstance(d.get("data"), dict), "Данные операции недоступны")
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "object_action_extra",
+                    "id": current["id"],
+                    "revision": current["revision"],
+                    "route": d["route"],
+                    "command": d["command"],
+                    "extra": d["data"],
+                },
+            )
+            self.send("Укажите причину действия. Она сохранится в журнале аудита.")
+        elif action == "admin_subject_edit":
+            self.require_admin()
+            current = self.api("/admin/objects/" + d["id"])["object"]
+            require(current["kind"] == "subject", "Профиль не найден")
+            self.state_set(
+                step="admin_subject_edit",
+                admin_pending={
+                    "type": "subject_edit",
+                    "id": current["id"],
+                    "revision": current["revision"],
+                },
+            )
+            self.send(
+                "Отправьте JSON с изменяемыми полями: "
+                '{"name":"Имя","birth_date":"2020-05-17","archive":false}.'
+            )
+        elif action == "admin_right_grant":
+            self.require_admin()
+            current = self.api("/admin/objects/" + d["id"])["object"]
+            require(current["kind"] == "subject", "Профиль не найден")
+            self.state_set(
+                step="admin_right_grant",
+                admin_pending={
+                    "type": "right_grant",
+                    "subject_id": current["id"],
+                    "key": "bot-right:" + secrets.token_urlsafe(16),
+                },
+            )
+            self.send(
+                "Отправьте JSON: "
+                '{"service":"subscription","course_id":null,"starts":1800000000,"ends":1800086400}.'
+            )
+        elif action == "admin_command":
+            self.require_admin()
+            current = self.api("/admin/objects/" + d["id"])["object"]
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "object_action",
+                    "id": current["id"],
+                    "revision": current["revision"],
+                    "text_revision": len(current["data"].get("revisions", [])),
+                    "route": d["route"],
+                    "command": d["command"],
+                },
+            )
+            self.send("Укажите причину действия. Она сохранится в журнале аудита.")
         else:
             self.send("Откройте актуальное меню.", MENU)
 
@@ -990,10 +1861,16 @@ class Bot:
             self.send("Статус: " + obj["status"], MENU)
 
     def admin_card(self, id):
-        o = self.api("/admin/objects/" + id)["object"]
+        card = self.api("/admin/objects/" + id)
+        o = card["object"]
         d = o["data"]
         buttons = []
-        if o["kind"] == "report":
+        if o["kind"] == "subject":
+            buttons = [
+                ("Изменить профиль", "admin_subject_edit", {"id": id}),
+                ("Оформить компенсационный доступ", "admin_right_grant", {"id": id}),
+            ]
+        elif o["kind"] == "report":
             buttons = [
                 (
                     "Написать редакцию",
@@ -1023,6 +1900,16 @@ class Bot:
         elif o["kind"] == "video_review":
             buttons = [
                 (
+                    "Назначить себе",
+                    "admin_command_data",
+                    {
+                        "id": id,
+                        "route": "crm",
+                        "command": "assign",
+                        "data": {"assigned_to": self.owner},
+                    },
+                ),
+                (
                     "Взять на просмотр",
                     "admin_command",
                     {"id": id, "route": "crm", "command": "take"},
@@ -1039,14 +1926,142 @@ class Bot:
                     {"id": id, "route": "crm", "command": "send-conclusion"},
                 ),
                 ("Пригласить на диагностику", "admin_text", {"id": id, "command": "crm/invite"}),
+                (
+                    "Добавить внутренний комментарий",
+                    "admin_object_input",
+                    {"id": id, "route": "crm", "command": "comment", "form": "text"},
+                ),
+                (
+                    "Закрыть обращение",
+                    "admin_command",
+                    {"id": id, "route": "crm", "command": "close"},
+                ),
             ]
             if d.get("conclusion_draft"):
                 self.send("Черновик мини-заключения:\n" + d["conclusion_draft"])
+        elif o["kind"] == "booking":
+            buttons = [
+                (
+                    "Предложить время",
+                    "admin_object_input",
+                    {"id": id, "route": "bookings", "command": "propose", "form": "booking"},
+                ),
+                (
+                    "Сохранить ссылку встречи",
+                    "admin_object_input",
+                    {"id": id, "route": "bookings", "command": "connection", "form": "text"},
+                ),
+                (
+                    "Завершить встречу",
+                    "admin_command",
+                    {"id": id, "route": "bookings", "command": "complete"},
+                ),
+                (
+                    "Отменить встречу",
+                    "admin_command",
+                    {"id": id, "route": "bookings", "command": "cancel"},
+                ),
+            ]
+        elif o["kind"] == "reconciliation":
+            buttons = [
+                (
+                    "Зафиксировать решение",
+                    "admin_command",
+                    {"id": id, "route": "reconciliations", "command": "resolve"},
+                )
+            ]
+        elif o["kind"] == "right":
+            buttons = [
+                (
+                    "Отозвать право",
+                    "admin_command",
+                    {"id": id, "route": "rights", "command": "revoke"},
+                )
+            ]
+        elif o["kind"] == "payment_attempt":
+            buttons = [
+                (
+                    "Сверить Lava.top",
+                    "admin_command",
+                    {"id": id, "route": "payments", "command": "reconcile"},
+                ),
+                (
+                    "Привязать ID счёта",
+                    "admin_object_input",
+                    {
+                        "id": id,
+                        "route": "payments",
+                        "command": "attach-invoice",
+                        "form": "provider_id",
+                    },
+                ),
+            ]
+        elif o["kind"] in ("funnel_run", "funnel_entry"):
+            buttons = [
+                (
+                    "Остановить напоминания",
+                    "admin_command",
+                    {
+                        "id": id,
+                        "route": "funnel-runs" if o["kind"] == "funnel_run" else "funnel-entries",
+                        "command": "stop",
+                    },
+                )
+            ]
+        elif o["kind"] == "data_request":
+            buttons = [
+                (
+                    title,
+                    "admin_command",
+                    {"id": id, "route": "data-requests", "command": command},
+                )
+                for title, command in (
+                    ("Взять в работу", "in_progress"),
+                    ("Ожидает политики", "awaiting_policy"),
+                    ("Отклонить", "reject"),
+                )
+            ]
+        elif o["kind"] == "ai_job":
+            buttons = [
+                (
+                    "Отменить задание",
+                    "admin_command",
+                    {"id": id, "route": "jobs", "command": "cancel"},
+                )
+            ]
+        if o["kind"] == "case":
+            buttons += [
+                (
+                    "Исправить основной ответ",
+                    "admin_text",
+                    {"id": id, "command": "cases/correct-answer"},
+                ),
+                (
+                    "Запросить сведения",
+                    "admin_text",
+                    {"id": id, "command": "cases/request-info"},
+                ),
+            ]
+        if o["kind"] == "order":
+            for receipt in card["receipts"]:
+                if receipt["provider"] == "stars":
+                    buttons.append(
+                        (
+                            "Полный возврат " + str(receipt["amount"]) + " " + receipt["currency"],
+                            "admin_refund",
+                            {
+                                "id": id,
+                                "revision": o["revision"],
+                                "charge": receipt["charge"],
+                                "amount": receipt["amount"],
+                            },
+                        )
+                    )
         if o["kind"] == "report" and d.get("revisions"):
             self.send("Текущая редакция для проверки:\n" + d["revisions"][-1]["text"])
         if o["kind"] in ("case", "video_review"):
             self.send("Анкета: " + json.dumps(d.get("answers", {}), ensure_ascii=False))
-            media = self.api("/admin/objects/" + id).get("media", [])
+            media = card.get("media", [])
             for item in media:
                 response = self.client.get("/api/media/" + item["id"])
                 if response.status_code == 200:
@@ -1059,6 +2074,32 @@ class Bot:
                         item["mime"],
                         "sendVideo" if review_video else "sendDocument",
                     )
+        if o.get("owner"):
+            buttons.append(("Аккаунт владельца", "admin_account_card", {"id": o["owner"]}))
+        if o.get("subject"):
+            buttons.append(("Профиль", "admin_entity_card", {"id": o["subject"]}))
+        related = []
+        for key in RELATED_OBJECT_KEYS:
+            value = d.get(key)
+            if isinstance(value, str) and value and value != id:
+                related.append((key, value))
+        for fulfillment in card.get("fulfillments", []):
+            value = fulfillment.get("object_id")
+            if value and value != id:
+                related.append(("fulfillment", value))
+        seen = set()
+        for label, value in related:
+            if value in seen:
+                continue
+            seen.add(value)
+            buttons.append(("Открыть " + label, "admin_entity_card", {"id": value}))
+        buttons += [
+            ("Скачать карточку JSON", "admin_object_export", {"id": id}),
+            ("История изменений", "admin_object_versions", {"id": id}),
+            ("Аудит объекта", "admin_object_audit", {"id": id}),
+            ("К списку", "admin_entity_list", {"kind": o["kind"]}),
+            ("В админку", "admin_menu", {}),
+        ]
         self.send(
             o["kind"]
             + " · "
@@ -1066,7 +2107,13 @@ class Bot:
             + "\n"
             + str(d.get("problem") or d.get("topic") or "")
             + "\nID: "
-            + id,
+            + id
+            + "\nПоступлений: "
+            + str(len(card.get("receipts", [])))
+            + " · доставок: "
+            + str(len(card.get("deliveries", [])))
+            + " · исполнений: "
+            + str(len(card.get("fulfillments", []))),
             buttons,
         )
 
@@ -1103,6 +2150,9 @@ class Bot:
 
     def message(self, message):
         text = message.get("text", "").strip()
+        current_step = str(self.state["data"].get("step") or "")
+        if text.startswith("/") and current_step.startswith("admin_"):
+            self.cancel_admin_prompt()
         if text == "/offer":
             return self.action("offer", {})
         if text.startswith("/start"):
@@ -1136,17 +2186,7 @@ class Bot:
         if text == "/id":
             return self.send("Ваш Telegram ID: " + str(self.user["id"]))
         if text == "/admin":
-            require(
-                self.user["id"] in self.app.config["ADMIN_TELEGRAM_IDS"],
-                "Недостаточно прав",
-                403,
-            )
-            public_url = str(self.app.config.get("PUBLIC_URL", "")).rstrip("/")
-            require(public_url.startswith("https://"), "Публичный адрес админки не настроен")
-            return self.send(
-                "Административный кабинет: сущности, контент, тарифы, интеграции и аудит.",
-                [("Открыть админку", "web_app", {"url": public_url + "/admin"})],
-            )
+            return self.admin_menu()
         if text == "/queue":
             return self.action("queue", {})
         if text == "/materials":
@@ -1154,7 +2194,7 @@ class Bot:
             return self.send(
                 "Материалы: "
                 + str(len(items))
-                + ". Для нового исходника отправьте /material. Для полного редактора используйте /login."
+                + ". Для нового исходника отправьте /material или откройте /admin."
             )
         if text == "/material":
             self.api("/admin/content?kind=material")
@@ -1163,21 +2203,368 @@ class Bot:
         if text == "/profiles":
             return self.action("profiles", {})
         if text == "/login":
-            code = secrets.token_urlsafe(24)
-            with transaction(self.app.config["DATABASE"]) as db:
-                db.execute(
-                    "INSERT INTO login_codes VALUES(?,?,?)",
-                    (
-                        hashlib.sha256(code.encode()).hexdigest(),
-                        self.owner,
-                        self.now + 300,
-                    ),
-                )
+            self.require_admin()
             return self.send(
-                "Код входа в кабинет действует 5 минут, один раз. Не передавайте его другим:\n\n"
-                + code
+                "Mini App не используется. Управление доступно прямо в Telegram.",
+                [("Открыть админку", "admin_menu", {})],
             )
         step = self.state["data"].get("step")
+        if step == "admin_account_search":
+            self.require_admin()
+            require(1 <= len(text) <= 100, "Введите имя или ID до 100 символов")
+            self.state_set(step=None)
+            return self.admin_accounts(query=text)
+        if step == "admin_search":
+            self.require_admin()
+            require(text, "Введите ID или JSON-фильтр")
+            if not text.startswith("{"):
+                self.state_set(step=None)
+                return self.admin_entity_card(text)
+            try:
+                filters = json.loads(text)
+            except ValueError:
+                raise Problem("Не удалось разобрать JSON-фильтр") from None
+            require(isinstance(filters, dict), "Ожидается JSON-объект")
+            require(
+                set(filters) <= {"kind", "status", "owner", "q"},
+                "Разрешены только kind, status, owner и q",
+            )
+            for value in filters.values():
+                require(isinstance(value, str) and len(value) <= 200, "Неверное значение фильтра")
+            self.state_set(step=None)
+            if filters.get("q"):
+                require(filters.get("kind"), "Для поиска контента укажите kind")
+                items = self.api(
+                    "/admin/content?"
+                    + urlencode(
+                        {
+                            "kind": filters["kind"],
+                            "q": filters["q"],
+                            "order": "desc",
+                        }
+                    )
+                )["items"]
+                return self.send(
+                    "Найдено: " + str(len(items)) + ".",
+                    [
+                        (
+                            str(o["data"].get("title") or o["id"])[:48],
+                            "admin_content_card",
+                            {"id": o["id"]},
+                        )
+                        for o in items[:30]
+                    ]
+                    + [("В админку", "admin_menu", {})],
+                )
+            items = self.api(
+                "/admin/objects?"
+                + urlencode(
+                    {
+                        **{key: filters.get(key, "") for key in ("kind", "status", "owner")},
+                        "order": "desc",
+                    }
+                )
+            )["items"]
+            return self.send(
+                "Найдено: " + str(len(items)) + ".",
+                [
+                    (
+                        str(o["data"].get("title") or o["data"].get("name") or o["id"])[:48],
+                        "admin_entity_card",
+                        {"id": o["id"]},
+                    )
+                    for o in items[:30]
+                ]
+                + [("В админку", "admin_menu", {})],
+            )
+        if step == "admin_asset_reason":
+            self.require_admin()
+            require(3 <= len(text) <= 1000, "Причина должна содержать от 3 до 1000 символов")
+            self.state_set(step="admin_asset_file", admin_asset_reason=text)
+            return self.send("Теперь отправьте файл документом. Максимальный размер — 20 МБ.")
+        if step == "admin_asset_file":
+            self.require_admin()
+            pending = self.state["data"].get("admin_pending") or {}
+            current = self.api("/admin/content/" + pending.get("id", ""))
+            require(
+                current["revision"] == pending.get("revision") and current["status"] == "draft",
+                "Черновик изменён. Откройте карточку и повторите загрузку.",
+                409,
+            )
+            content, mime, filename = self.admin_document(message, 20 * 1024 * 1024)
+            result = self.client.post(
+                "/api/admin/content/" + current["id"] + "/asset",
+                data={
+                    "file": (io.BytesIO(content), filename, mime),
+                    "reason": self.state["data"]["admin_asset_reason"],
+                },
+            )
+            require(result.status_code < 400, result.json.get("error", "Не удалось сохранить файл"))
+            asset = result.json
+            data = {**current["data"]}
+            if current["kind"] == "exercise":
+                data.update(video_id=asset["id"], video_verified=False)
+            else:
+                data["asset_id"] = asset["id"]
+            updated = self.api(
+                "/admin/content/" + current["id"],
+                "PATCH",
+                {
+                    "revision": current["revision"],
+                    "title": current["data"].get("title", ""),
+                    "data": data,
+                    "reason": self.state["data"]["admin_asset_reason"],
+                },
+            )
+            self.state_set(step=None, admin_pending=None, admin_asset_reason=None)
+            return self.admin_content_card(updated["id"])
+        if step in ("admin_subject_edit", "admin_right_grant"):
+            self.require_admin()
+            try:
+                values = json.loads(text)
+            except ValueError:
+                raise Problem("Не удалось разобрать JSON") from None
+            require(isinstance(values, dict), "Ожидается JSON-объект")
+            pending = self.state["data"].get("admin_pending") or {}
+            if step == "admin_subject_edit":
+                require(
+                    set(values) <= {"name", "birth_date", "archive"} and values,
+                    "Разрешены name, birth_date и archive",
+                )
+            else:
+                require(
+                    set(values) == {"service", "course_id", "starts", "ends"},
+                    "Нужны service, course_id, starts и ends",
+                )
+            self.state_set(step="admin_reason", admin_pending={**pending, "values": values})
+            return self.send("Укажите причину действия. Она сохранится в журнале аудита.")
+        if step == "admin_object_input":
+            self.require_admin()
+            pending = self.state["data"].get("admin_pending") or {}
+            form = pending.get("form")
+            if form == "booking":
+                try:
+                    extra = json.loads(text)
+                except ValueError:
+                    raise Problem("Не удалось разобрать JSON") from None
+                require(isinstance(extra, dict), "Ожидается JSON-объект")
+                require(
+                    set(extra) == {"starts", "duration_minutes", "timezone"},
+                    "Нужны starts, duration_minutes и timezone",
+                )
+            elif form == "provider_id":
+                require(1 <= len(text) < 200, "Введите ID внешнего счёта")
+                extra = {"provider_id": text}
+            else:
+                require(text, "Введите текст")
+                extra = {"text": text}
+            self.state_set(
+                step="admin_reason",
+                admin_pending={**pending, "extra": extra},
+            )
+            return self.send("Укажите причину действия. Она сохранится в журнале аудита.")
+        if step in ("admin_content_create_payload", "admin_content_edit_payload"):
+            raw = self.admin_payload_text(message)
+            try:
+                payload = json.loads(raw)
+            except (TypeError, ValueError):
+                raise Problem("Не удалось разобрать JSON") from None
+            require(isinstance(payload, dict), "Ожидается JSON-объект")
+            require(
+                isinstance(payload.get("title"), str) and payload["title"].strip(),
+                "В JSON нужно непустое поле title",
+            )
+            require(isinstance(payload.get("data"), dict), "В JSON нужно поле data с объектом")
+            pending = {
+                "type": "content_create"
+                if step == "admin_content_create_payload"
+                else "content_edit",
+                "title": payload["title"].strip(),
+                "data": payload["data"],
+            }
+            if step == "admin_content_create_payload":
+                pending["kind"] = self.state["data"]["admin_kind"]
+            else:
+                pending["id"] = self.state["data"]["admin_object_id"]
+                pending["revision"] = self.state["data"]["admin_object_revision"]
+            self.state_set(step="admin_reason", admin_pending=pending)
+            return self.send("Укажите причину сохранения. Она попадёт в журнал аудита.")
+        if step == "admin_text":
+            require(text, "Введите текст")
+            d = self.state["data"]
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "object_text",
+                    "id": d["object_id"],
+                    "revision": d["object_revision"],
+                    "command": d["command"],
+                    "text": text,
+                },
+            )
+            return self.send("Укажите причину действия. Она сохранится в журнале аудита.")
+        if step == "admin_reason":
+            self.require_admin()
+            require(3 <= len(text) <= 1000, "Причина должна содержать от 3 до 1000 символов")
+            pending = self.state["data"].get("admin_pending") or {}
+            operation = pending.get("type")
+            result = None
+            if operation == "content_create":
+                result = self.api(
+                    "/admin/content",
+                    "POST",
+                    {
+                        "kind": pending["kind"],
+                        "title": pending["title"],
+                        "data": pending["data"],
+                        "reason": text,
+                    },
+                )
+            elif operation == "content_edit":
+                result = self.api(
+                    "/admin/content/" + pending["id"],
+                    "PATCH",
+                    {
+                        "revision": pending["revision"],
+                        "title": pending["title"],
+                        "data": pending["data"],
+                        "reason": text,
+                    },
+                )
+            elif operation == "content_action":
+                result = self.api(
+                    "/admin/content/" + pending["id"] + "/" + pending["command"],
+                    "POST",
+                    {"revision": pending["revision"], "reason": text},
+                )
+            elif operation == "content_patch":
+                result = self.api(
+                    "/admin/content/" + pending["id"],
+                    "PATCH",
+                    {
+                        "revision": pending["revision"],
+                        "title": pending["title"],
+                        "data": pending["data"],
+                        "reason": text,
+                    },
+                )
+            elif operation == "material_render":
+                result = self.api(
+                    "/admin/materials/" + pending["id"] + "/render-pdf",
+                    "POST",
+                    {"revision": pending["revision"], "reason": text},
+                )
+            elif operation == "account_action":
+                self.api(
+                    "/admin/accounts/" + pending["id"] + "/" + pending["command"],
+                    "POST",
+                    {"reason": text},
+                )
+                self.state_set(step=None, admin_pending=None)
+                return self.admin_account_card(pending["id"])
+            elif operation == "outbox_retry":
+                self.api(
+                    "/admin/outbox/" + pending["id"] + "/retry",
+                    "POST",
+                    {"reason": text},
+                )
+                self.state_set(step=None, admin_pending=None)
+                return self.admin_outbox_card(pending["id"])
+            elif operation == "subject_edit":
+                self.api(
+                    "/admin/subjects/" + pending["id"],
+                    "POST",
+                    {
+                        "revision": pending["revision"],
+                        **pending["values"],
+                        "reason": text,
+                    },
+                )
+                result = {"id": pending["id"], "kind": "object"}
+            elif operation == "right_grant":
+                granted = self.api(
+                    "/admin/rights/grant",
+                    "POST",
+                    {
+                        "subject_id": pending["subject_id"],
+                        **pending["values"],
+                        "reason": text,
+                        "key": pending["key"],
+                    },
+                )
+                result = {"id": granted["id"], "kind": "object"}
+            elif operation == "object_action":
+                self.api(
+                    "/admin/" + pending["route"] + "/" + pending["id"] + "/" + pending["command"],
+                    "POST",
+                    {
+                        "revision": pending["revision"],
+                        "reason": text,
+                        "text_revision": pending["text_revision"],
+                    },
+                )
+                result = {"id": pending["id"], "kind": "object"}
+            elif operation == "object_action_extra":
+                self.api(
+                    "/admin/" + pending["route"] + "/" + pending["id"] + "/" + pending["command"],
+                    "POST",
+                    {
+                        "revision": pending["revision"],
+                        "reason": text,
+                        **pending["extra"],
+                    },
+                )
+                result = {"id": pending["id"], "kind": "object"}
+            elif operation == "object_text":
+                route, command = pending["command"].split("/")
+                self.api(
+                    "/admin/" + route + "/" + pending["id"] + "/" + command,
+                    "POST",
+                    {
+                        "revision": pending["revision"],
+                        "text": pending["text"],
+                        "reason": text,
+                    },
+                )
+                result = {"id": pending["id"], "kind": "object"}
+            elif operation == "refund":
+                refund = self.api(
+                    "/admin/orders/" + pending["id"] + "/refund",
+                    "POST",
+                    {
+                        "revision": pending["revision"],
+                        "charge": pending["charge"],
+                        "amount": pending["amount"],
+                        "reason": text,
+                    },
+                )
+                result = {"id": refund["id"], "kind": "object"}
+            elif operation == "material_create":
+                result = self.api(
+                    "/admin/content",
+                    "POST",
+                    {
+                        "kind": "material",
+                        "title": pending["title"],
+                        "data": pending["data"],
+                        "reason": text,
+                    },
+                )
+            else:
+                raise Problem("Действие устарело. Откройте /admin заново")
+            self.state_set(
+                step=None,
+                admin_pending=None,
+                admin_object_id=None,
+                admin_object_revision=None,
+                admin_kind=None,
+                object_id=None,
+                object_revision=None,
+                command=None,
+            )
+            if result.get("kind") == "object":
+                return self.admin_card(result["id"])
+            return self.admin_content_card(result["id"])
         if step == "funnel_checkout_email":
             attempt = self.api(
                 "/orders/" + self.state["data"]["funnel_order_id"] + "/checkout",
@@ -1322,11 +2709,10 @@ class Bot:
                 "Отправьте текст исходника. Он останется черновиком до проверки источника и прав использования."
             )
         elif step == "material_text":
-            self.api(
-                "/admin/content",
-                "POST",
-                {
-                    "kind": "material",
+            self.state_set(
+                step="admin_reason",
+                admin_pending={
+                    "type": "material_create",
                     "title": self.state["data"]["material_title"],
                     "data": {
                         "owner": "Специалист",
@@ -1335,13 +2721,9 @@ class Bot:
                         "source": "Загружено специалистом через Telegram",
                         "rights": "",
                     },
-                    "reason": "Получен исходный материал",
                 },
             )
-            self.state_set(step=None)
-            self.send(
-                "Исходник сохранён как черновик. Публикация требует проверки источника и прав."
-            )
+            self.send("Укажите причину сохранения исходника. Она попадёт в журнал аудита.")
         elif step == "profile_birth":
             d = self.state["data"]
             self.check_onboarding_age({"birth_date": text, "kind": d["profile_kind"]})
@@ -1444,21 +2826,6 @@ class Bot:
             )
             self.state_set(step=None)
             self.send("Уточнение принято. Специалисту отведено 48 часов на ответ.", MENU)
-        elif step == "admin_text":
-            d = self.state["data"]
-            o = self.api("/admin/objects/" + d["object_id"])["object"]
-            route, command = d["command"].split("/")
-            self.api(
-                "/admin/" + route + "/" + o["id"] + "/" + command,
-                "POST",
-                {
-                    "revision": o["revision"],
-                    "text": text,
-                    "reason": "Работа специалиста через Telegram",
-                },
-            )
-            self.state_set(step=None)
-            self.admin_card(o["id"])
         else:
             self.send(
                 "Выберите действие в меню. Ваш Telegram ID: " + str(self.user["id"]),

@@ -600,11 +600,17 @@ def register_commerce(app):
     @protected(admin=True)
     def admin_objects():
         kind, owner, status = ((request.args.get(k) or None) for k in ("kind", "owner", "status"))
+        order = "DESC" if request.args.get("order") == "desc" else "ASC"
         return {
             "items": [
                 unpack(r)
                 for r in g.db.execute(
-                    "SELECT * FROM objects WHERE (? IS NULL OR kind=?) AND (? IS NULL OR owner=?) AND (? IS NULL OR status=?) ORDER BY created,id LIMIT 100 OFFSET ?",
+                    "SELECT * FROM objects WHERE (? IS NULL OR kind=?) AND (? IS NULL OR owner=?) "
+                    "AND (? IS NULL OR status=?) ORDER BY created "
+                    + order
+                    + ",id "
+                    + order
+                    + " LIMIT 100 OFFSET ?",
                     (kind, kind, owner, owner, status, status, offset()),
                 )
             ]
