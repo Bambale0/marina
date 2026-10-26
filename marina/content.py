@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from flask import g, request
 from . import body, object_get, offset, protected, reason, require
 from .db import audit, insert, unpack, update
@@ -15,6 +18,13 @@ KINDS = {
     "course",
     "template",
 }
+
+
+def material_source_digest(data):
+    source = {key: data.get(key) for key in ("title", "text", "filename")}
+    return hashlib.sha256(
+        json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def register_content(app):
@@ -146,6 +156,11 @@ def register_content(app):
             "Укажите название",
         )
         payload.pop("approval", None)
+        if obj["kind"] == "material" and any(
+            payload.get(key) != obj["data"].get(key) for key in ("title", "text", "filename")
+        ):
+            payload.pop("asset_id", None)
+            payload.pop("render_source_sha256", None)
         updated = update(g.db, obj, g.now, payload)
         audit(g.db, g.actor["id"], "content.edit", updated, g.now, why, obj["revision"])
         return updated
@@ -252,7 +267,6 @@ def register_content(app):
     @app.post("/api/admin/content/<id>/asset")
     @protected(admin=True)
     def upload_asset(id):
-        import hashlib
         from .db import uid
 
         obj = object_get(g.db, id)
@@ -353,6 +367,11 @@ def validate(obj):
             and re.fullmatch(r"[A-Za-z0-9_-]+\.pdf", d["filename"]),
             "Для текстового материала укажите текст и имя PDF латиницей",
         )
+        if d.get("asset_id"):
+            require(
+                d.get("render_source_sha256") == material_source_digest(d),
+                "Текст PDF изменён; сформируйте файл заново",
+            )
     if obj["kind"] == "method":
         from .screening import validate_method
 

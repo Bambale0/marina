@@ -66,6 +66,19 @@ def price_text(product):
     return f"{amount // 100},{amount % 100:02d} ₽"
 
 
+def lava_guide_ready(app, product):
+    data = product["data"]
+    return bool(
+        app.config.get("DEV_EXTERNAL_LAVA_CHECKOUT", False)
+        and data.get("currency") == "RUB"
+        and data.get("web_sales_approved") is True
+        and data.get("lava_offer_id")
+        and app.config.get("LAVA_API_KEY")
+        and app.config.get("LAVA_WEBHOOK_SECRET")
+        and str(app.config.get("PUBLIC_URL", "")).startswith("https://")
+    )
+
+
 def defaults(group):
     require(group in AGES, "Выберите возраст: 3–4, 5–6, 7–9 или 10–14 лет")
     try:
@@ -721,7 +734,7 @@ def register_funnel(app):
             product,
             {"run_id": id, "surface": "telegram"},
             g.now,
-            allow_external_lava=app.config.get("DEV_EXTERNAL_LAVA_CHECKOUT", False),
+            allow_external_lava=lava_guide_ready(app, product),
         )
         order = insert(
             g.db,
@@ -856,6 +869,8 @@ def register_funnel(app):
             "Укажите имя PDF латиницей",
         )
         pdf = render_text_material(obj["data"])
+        from .content import material_source_digest
+
         asset_id = uid()
         g.db.execute(
             "INSERT INTO blobs VALUES(?,?,?,?,?,?,?,?)",
@@ -874,7 +889,12 @@ def register_funnel(app):
             g.db,
             obj,
             g.now,
-            {**obj["data"], "asset_id": asset_id, "format": "pdf"},
+            {
+                **obj["data"],
+                "asset_id": asset_id,
+                "format": "pdf",
+                "render_source_sha256": material_source_digest(obj["data"]),
+            },
         )
         audit(
             g.db,
@@ -1141,11 +1161,7 @@ def notify_funnel(app, owner, id, event):
             if not snapshot.get("guide_product_id"):
                 return
             product = object_get(db, snapshot["guide_product_id"], "product")
-            external_lava = (
-                product["data"].get("currency") == "RUB"
-                and product["data"].get("web_sales_approved") is True
-                and app.config.get("DEV_EXTERNAL_LAVA_CHECKOUT", False)
-            )
+            external_lava = lava_guide_ready(app, product)
             if product["status"] != "published" or not (
                 product["data"].get("currency") == "XTR" or external_lava
             ):

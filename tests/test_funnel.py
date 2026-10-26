@@ -373,8 +373,42 @@ def test_telegram_lava_tripwire_collects_email_before_checkout(app):
     assert current["data"]["order_status"] == "pending"
 
 
+def test_lava_adjustment_webhook_preserves_envelope_once(app):
+    app.config["LAVA_WEBHOOK_SECRET"] = "test-webhook-key"
+    payload = {
+        "event_id": "7ea82675-4ded-4133-95a7-a6efbaf165cc",
+        "event_type": "refund.success",
+        "created_at": "2027-01-15T08:00:00Z",
+        "data": {
+            "refund_id": "2f36c6c0-dd4c-47e0-8759-8219869f0123",
+            "refund_type": "full",
+            "amount": 1.23,
+            "currency": "RUB",
+        },
+    }
+    client = app.test_client()
+    for _ in range(2):
+        response = client.post(
+            "/api/webhooks/lava",
+            headers={"X-Api-Key": "test-webhook-key"},
+            json=payload,
+        )
+        assert response.status_code == 200, response.json
+    with connect(app.config["DATABASE"]) as db:
+        rows = db.execute(
+            "SELECT data FROM objects WHERE kind='reconciliation' AND status='open'"
+        ).fetchall()
+    assert len(rows) == 1
+    assert "refund.success" in rows[0]["data"]
+
+
 def test_external_lava_tripwire_is_disabled_without_explicit_dev_gate(app):
-    app.config["DEV_EXTERNAL_LAVA_CHECKOUT"] = True
+    app.config.update(
+        DEV_EXTERNAL_LAVA_CHECKOUT=True,
+        LAVA_API_KEY="test-api-key",
+        LAVA_WEBHOOK_SECRET="test-webhook-key",
+        PUBLIC_URL="https://dev.example.test",
+    )
     _, owner, run, _, _, _, _ = setup_sale(
         app,
         currency="RUB",
@@ -382,6 +416,31 @@ def test_external_lava_tripwire_is_disabled_without_explicit_dev_gate(app):
         web_sales_approved=True,
     )
     app.config["DEV_EXTERNAL_LAVA_CHECKOUT"] = False
+    response = owner.post(f"/api/funnel-runs/{run['id']}/purchase", json={})
+    assert response.status_code == 422
+    assert "не разрешена" in response.json["error"]
+
+
+def test_incomplete_lava_setup_does_not_create_tripwire_order(app):
+    app.config.update(
+        DEV_EXTERNAL_LAVA_CHECKOUT=True,
+        LAVA_API_KEY="test-api-key",
+        LAVA_WEBHOOK_SECRET="test-webhook-key",
+        PUBLIC_URL="https://dev.example.test",
+    )
+    _, owner, run, _, _, sent, _ = setup_sale(
+        app,
+        currency="RUB",
+        lava_offer_id="836b9fc5-7ae9-4a27-9642-592bc44072b7",
+        web_sales_approved=True,
+    )
+    app.config["LAVA_API_KEY"] = ""
+    marker = len(sent)
+    finish(owner, start(owner, key="incomplete-lava"), ["b"] * 6)
+    drain(app)
+    app.clock[0] += 32
+    drain(app)
+    assert not any("1,23 ₽" in data.get("text", "") for _, data in sent[marker:])
     response = owner.post(f"/api/funnel-runs/{run['id']}/purchase", json={})
     assert response.status_code == 422
     assert "не разрешена" in response.json["error"]
@@ -414,8 +473,23 @@ def test_admin_renders_text_material_and_lists_tripwire_entities(app):
     assert rendered.status_code == 200, rendered.json
     material = rendered.json
     assert material["data"]["asset_id"]
+    assert material["data"]["render_source_sha256"]
     pdf = admin.get(f"/api/admin/materials/{material['id']}/pdf")
     assert pdf.status_code == 200 and pdf.data.startswith(b"%PDF")
+
+    changed = admin.patch(
+        f"/api/admin/content/{material['id']}",
+        json={
+            "revision": material["revision"],
+            "title": material["data"]["title"],
+            "data": {**material["data"], "text": "Исправленный базовый текст."},
+            "reason": "Проверить сброс устаревшего PDF",
+        },
+    )
+    assert changed.status_code == 200, changed.json
+    changed = changed.json
+    assert "asset_id" not in changed["data"]
+    assert "render_source_sha256" not in changed["data"]
 
     assert owner.get("/api/admin/tripwire").status_code == 403
     dashboard = admin.get("/api/admin/tripwire")

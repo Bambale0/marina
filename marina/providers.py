@@ -262,14 +262,15 @@ def register_providers(app):
                 return {"ok": True, "queued": True}
             return {"ok": True}
         with transaction(app.config["DATABASE"]) as db:
-            event_type = d.get("eventType")
+            event_type = d.get("event_type")
             if event_type in ("refund.success", "chargeback.initiated"):
                 # Preserve authenticated financial evidence; policy-sensitive revocation is explicit.
-                event_id = ":".join(
-                    str(d.get(key, "")) for key in ("eventType", "contractId", "timestamp")
-                )
+                event_id = d.get("event_id")
                 require(
-                    d.get("contractId") and d.get("timestamp") and len(event_id) < 300,
+                    isinstance(event_id, str)
+                    and 1 <= len(event_id) < 200
+                    and isinstance(d.get("created_at"), str)
+                    and isinstance(d.get("data"), dict),
                     "Неверное событие",
                 )
                 from .screening import idempotent
