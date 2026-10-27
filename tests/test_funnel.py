@@ -210,7 +210,12 @@ def setup_sale(app, group="3-4", currency="XTR", **product_fields):
     app.clock[0] += 30
     drain(app)
     assert "ИТОГ СКРИНИНГА" in sent[-1][1]["text"]
-    app.clock[0] += 2
+    assert "reply_markup" not in sent[-1][1]
+    marker = len(sent)
+    app.clock[0] += 179
+    drain(app)
+    assert len(sent) == marker
+    app.clock[0] += 1
     drain(app)
     assert ("123 ⭐" if currency == "XTR" else "1,23 ₽") in sent[-1][1]["text"]
     run = owner.get("/api/funnel-runs/" + run["id"]).json
@@ -227,7 +232,18 @@ def test_dev_tripwire_without_price_can_be_accepted_and_delivers_pdf(app):
     drain(app)
     app.clock[0] += 30
     drain(app)
-    app.clock[0] += 2
+    assert "reply_markup" not in sent[-1][1]
+    with connect(app.config["DATABASE"]) as db:
+        available = db.execute(
+            "SELECT available FROM outbox WHERE object_id=? AND event='funnel.offer'",
+            (run["id"],),
+        ).fetchone()[0]
+    assert available - app.clock[0] == 180
+    marker = len(sent)
+    app.clock[0] += 179
+    drain(app)
+    assert len(sent) == marker
+    app.clock[0] += 1
     drain(app)
 
     assert "будет указана позже" in sent[-1][1]["text"]
@@ -276,9 +292,10 @@ def test_telegram_dev_tripwire_accept_button_continues_without_payment(app):
     sent, files = capture(app)
     finish(owner, start(owner), ["b"] * 6)
     drain(app)
-    app.clock[0] += 32
+    app.clock[0] += 30
     drain(app)
-    app.clock[0] += 2
+    assert "reply_markup" not in sent[-1][1]
+    app.clock[0] += 180
     drain(app)
     button = next(
         button
@@ -334,7 +351,9 @@ def test_dev_tripwire_without_explicit_bypass_stays_closed(app):
     sent, _ = capture(app)
     run = finish(owner, start(owner), ["b"] * 6)
     drain(app)
-    app.clock[0] += 32
+    app.clock[0] += 30
+    drain(app)
+    app.clock[0] += 180
     drain(app)
     assert not any("✅ Принять" in str(data) for _, data in sent)
     assert (
@@ -582,7 +601,9 @@ def test_incomplete_lava_setup_does_not_create_tripwire_order(app):
     marker = len(sent)
     finish(owner, start(owner, key="incomplete-lava"), ["b"] * 6)
     drain(app)
-    app.clock[0] += 32
+    app.clock[0] += 30
+    drain(app)
+    app.clock[0] += 180
     drain(app)
     assert not any("1,23 ₽" in data.get("text", "") for _, data in sent[marker:])
     response = owner.post(f"/api/funnel-runs/{run['id']}/purchase", json={})
@@ -700,9 +721,9 @@ def test_admin_manages_offer_and_guide_purchase_policy_without_subscription_rule
     capture(app)
     run = finish(owner, start(owner), ["b"] * 6)
     drain(app)
-    app.clock[0] += 32
+    app.clock[0] += 30
     drain(app)
-    app.clock[0] += 2
+    app.clock[0] += 180
     drain(app)
     run = owner.get("/api/funnel-runs/" + run["id"]).json
     quote = owner.post(
@@ -728,9 +749,9 @@ def test_admin_manages_offer_and_guide_purchase_policy_without_subscription_rule
     )
     second_run = finish(owner, start(owner, key="replacement-offer"), ["b"] * 6)
     drain(app)
-    app.clock[0] += 32
+    app.clock[0] += 30
     drain(app)
-    app.clock[0] += 2
+    app.clock[0] += 180
     drain(app)
     blocked = owner.post(
         f"/api/funnel-runs/{second_run['id']}/purchase",
@@ -1153,8 +1174,19 @@ def test_unverified_or_late_payment_cannot_deliver_guide(app, late):
     assert admin.get("/api/admin/objects?kind=reconciliation").json["items"]
 
 
-def test_green_free_pdf_and_red_consultation_have_no_paid_gate(app):
+def test_result_removes_consultation_buttons_but_keeps_configured_paths(app):
     admin, owner = login(app), login(app, 2)
+    privacy = publish(
+        admin,
+        "policy",
+        {
+            "type": "privacy",
+            "terms": "Synthetic privacy policy",
+            "media_max_bytes": 10000,
+            "retention_days": 30,
+        },
+    )
+    owner.post("/api/consents", json={"policy_id": privacy["id"], "accepted": True})
     base = scenario(admin)
     material = admin.post(
         f"/api/admin/funnels/{base['id']}/prepare-guide",
@@ -1168,13 +1200,25 @@ def test_green_free_pdf_and_red_consultation_have_no_paid_gate(app):
     app.clock[0] += 30
     drain(app)
     assert "Игры по возрасту" in str(sent[-1])
+    assert "О диагностике" not in str(sent[-1])
+    assert "Написать Марине" not in str(sent[-1])
     assert owner.get(f"/api/funnel-runs/{green['id']}/free-pdf").data.startswith(b"%PDF")
     red = finish(owner, start(owner, key="red"), ["c"] * 6)
     drain(app)
     app.clock[0] += 30
     drain(app)
-    assert "О диагностике" in str(sent[-1])
+    assert "reply_markup" not in sent[-1][1]
+    assert "О диагностике" not in str(sent[-1])
+    assert "Написать Марине" not in str(sent[-1])
     assert owner.get(f"/api/funnel-runs/{red['id']}/free-pdf").status_code == 403
+    from marina.bot import Bot
+
+    bot = Bot(app, {"id": 2, "first_name": "Client"}, 2, 11760)
+    bot.state_set(funnel_run_id=red["id"])
+    bot.action("funnel_resume", {})
+    assert "reply_markup" not in sent[-1][1]
+    assert "О диагностике" not in str(sent[-1])
+    assert "Написать Марине" not in str(sent[-1])
     assert (
         "промокод"
         not in owner.get(f"/api/funnel-runs/{red['id']}/consultation").json["text"].lower()

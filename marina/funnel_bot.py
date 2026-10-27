@@ -73,10 +73,7 @@ def handle_action(bot, action, d):
         run = bot.api("/funnel-runs/" + id + "/resume", "POST", {})
         if run["status"] == "completed":
             result = run["data"]["result"]
-            bot.send(
-                result["text"] + "\n\n" + result["limitations"],
-                [("📋 О диагностике", "funnel_consultation", {"id": id})],
-            )
+            bot.send(result["text"] + "\n\n" + result["limitations"])
         else:
             show_question(bot, run)
     elif action == "funnel_age":

@@ -423,7 +423,17 @@ class Bot:
                 and material["status"] == "published"
                 and material["asset_configured"]
             )
-            lines.append(group["label"] + ": " + ("готово" if ready else "неполный комплект"))
+            delay = (
+                group.get("funnel", {}).get("tripwire_delay_seconds")
+                if group.get("funnel")
+                else None
+            )
+            lines.append(
+                group["label"]
+                + ": "
+                + ("готово" if ready else "неполный комплект")
+                + (" · трипваер через " + str(delay) + " сек." if delay is not None else "")
+            )
             for key, label in (("funnel", "сценарий"), ("product", "тариф"), ("material", "PDF")):
                 if group.get(key):
                     buttons.append(

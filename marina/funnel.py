@@ -45,6 +45,7 @@ PROFILE = {
 }
 RESULT_WAIT_SECONDS = 30
 PROGRESS_STEPS = (0, 20, 40, 60, 80, 100)
+DEFAULT_TRIPWIRE_DELAY_SECONDS = 3 * 60
 
 
 def progress_text(percent):
@@ -88,7 +89,14 @@ def defaults(group):
         )
     except (OSError, ValueError):
         require(False, "Файл сценария ещё не загружен в закрытое хранилище")
-    return {**data[group], "welcome_text": WELCOME, "age_reminder_text": AGE_REMINDER}
+    return {
+        **data[group],
+        "welcome_text": WELCOME,
+        "age_reminder_text": AGE_REMINDER,
+        "tripwire_delay_seconds": data[group].get(
+            "tripwire_delay_seconds", DEFAULT_TRIPWIRE_DELAY_SECONDS
+        ),
+    }
 
 
 def published(db, group=None):
@@ -163,6 +171,11 @@ def validate_funnel(d):
     require(
         all(isinstance(f.get("text"), str) and 1 <= len(f["text"]) <= 16000 for f in followups),
         "Проверьте тексты касаний",
+    )
+    require(
+        type(d.get("tripwire_delay_seconds")) is int
+        and 0 <= d["tripwire_delay_seconds"] <= 24 * 60 * 60,
+        "Укажите задержку трипваера в секундах",
     )
     pages = d.get("guide_pages")
     require(
@@ -1031,6 +1044,9 @@ def register_funnel(app):
                             "status": funnel["status"],
                             "revision": funnel["revision"],
                             "contact_configured": bool(funnel["data"].get("contact_url")),
+                            "tripwire_delay_seconds": funnel["data"].get(
+                                "tripwire_delay_seconds", DEFAULT_TRIPWIRE_DELAY_SECONDS
+                            ),
                         }
                         if funnel
                         else None
@@ -1360,7 +1376,7 @@ def notify_funnel(app, owner, id, event):
             )
     elif event == "funnel.result":
         text = d["result"]["text"] + "\n\n" + d["result"]["limitations"]
-        buttons = list(consult)
+        buttons = []
         if d["result"]["zone"] == "green" and snapshot.get("free_material_id"):
             buttons.insert(0, ("🎁 Игры по возрасту — PDF", "funnel_free", values))
         if d.get("progress_message_id"):
@@ -1374,7 +1390,12 @@ def notify_funnel(app, owner, id, event):
                 snapshot.get("guide_product_id")
                 or app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
             ):
-                schedule(db, current, "funnel.offer", now + 2)
+                schedule(
+                    db,
+                    current,
+                    "funnel.offer",
+                    now + snapshot.get("tripwire_delay_seconds", DEFAULT_TRIPWIRE_DELAY_SECONDS),
+                )
     elif event == "funnel.offer":
         expires = d.get("offer_expires", now + 7200)
         if expires <= now:
