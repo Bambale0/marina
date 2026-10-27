@@ -4,6 +4,7 @@ const labels = {
   welcome_text: "Приветствие",
   age_reminder_text: "Напоминание о выборе возраста",
   offer_text: "Предложение руководства",
+  tripwire_delay_seconds: "Задержка трипваера после результата, секунд",
   guide_title: "Название руководства",
   guide_pages: "Страницы руководства",
   guide_filename: "Имя PDF-файла",

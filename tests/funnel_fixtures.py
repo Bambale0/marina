@@ -58,6 +58,7 @@ def configure_funnel_source(app, tmp_path):
             "age_group": group,
             "method": method,
             "offer_text": "Тестовое руководство. Стоимость: {price}. Срок предложения — 2 часа.",
+            "tripwire_delay_seconds": 180,
             "guide_title": "Synthetic guide " + group,
             "guide_pages": [
                 {
