@@ -16,6 +16,18 @@ def private_source(app, tmp_path):
     configure_funnel_source(app, tmp_path)
 
 
+def test_telegram_age_button_shows_5_to_7_without_changing_group_key():
+    from marina.funnel_bot import age_buttons
+
+    options = age_buttons("test-entry")
+    assert (
+        "👦 5–7 лет",
+        "funnel_age",
+        {"entry_id": "test-entry", "age_group": "5-6"},
+    ) in options
+    assert not any(label == "👦 5–6 лет" for label, _, _ in options)
+
+
 def scenario(admin, group="3-4", **overrides):
     response = admin.get("/api/admin/funnel-defaults/" + group)
     assert response.status_code == 200, response.json
