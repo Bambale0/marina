@@ -17,7 +17,7 @@ from . import body, object_get, protected, reason, require
 from .db import audit, connect, emit, insert, transaction, uid, unpack, update
 from .screening import idempotent, score, validate_method
 
-AGES = {"3-4": "🧒 3–4 года", "5-6": "👦 5–6 лет", "7-9": "🎒 7–9 лет", "10-14": "🧑 10–14 лет"}
+AGES = {"3-4": "🧒 3–4 года", "5-6": "👦 5–7 лет", "7-9": "🎒 7–9 лет", "10-14": "🧑 10–14 лет"}
 AGE_MONTHS = {"3-4": (36, 59), "5-6": (60, 83), "7-9": (84, 119), "10-14": (120, 179)}
 WELCOME = """Здравствуйте, {name}!
 Меня зовут Савельева Марина.
