@@ -119,11 +119,12 @@ def register_services(app):
     @app.get("/api/reports/<id>/pdf")
     @protected()
     def report_pdf(id):
-        obj = object_get(g.db, id, "report", g.actor["id"])
+        admin = g.actor["role"] == "admin"
+        obj = object_get(g.db, id, "report", None if admin else g.actor["id"])
         require(obj["data"].get("pdf_id"), "PDF ещё готовится", 404)
         blob = g.db.execute(
             "SELECT body FROM blobs WHERE id=? AND owner=?",
-            (obj["data"]["pdf_id"], g.actor["id"]),
+            (obj["data"]["pdf_id"], obj["owner"]),
         ).fetchone()
         require(blob, "Файл недоступен", 404)
         return Response(

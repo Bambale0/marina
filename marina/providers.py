@@ -83,6 +83,8 @@ def invoice(app, attempt):
             },
         )
         return {"url": link, "provider_id": None}
+    require(type(d["total"]) is int and d["total"] > 0, "Неверная сумма счёта")
+    require(d["currency"] == "RUB", "Валюта тарифа не поддерживается")
     result = lava(
         app,
         "POST",
@@ -145,6 +147,10 @@ def register_providers(app):
     @protected()
     def checkout(id):
         o = object_get(g.db, id, "order", g.actor["id"])
+        if g.actor["role"] == "admin":
+            from .commerce import admin_fulfill
+
+            return admin_fulfill(g.db, o, g.actor["id"], g.now)
         require(
             o["status"] == "pending" and o["data"]["expires"] > g.now,
             "Счёт уже оплачен или истёк",

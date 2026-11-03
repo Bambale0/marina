@@ -1298,6 +1298,9 @@ class Bot:
             order = self.api(
                 "/orders", "POST", {"quote_id": d["id"], "key": "bot-quote:" + d["id"]}
             )
+            if order["status"] == "paid":
+                self.send("Доступ открыт.", MENU)
+                return
             p = order["data"]
             telegram(
                 self.app,

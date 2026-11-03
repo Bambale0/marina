@@ -5,12 +5,14 @@ from zoneinfo import ZoneInfo
 
 from flask import g, request, Response
 from . import age_months, body, object_get, protected, reason, require
-from .commerce import policies, rights
+from .commerce import is_admin, policies, rights
 from .db import audit, emit, insert, unpack, update
 from .screening import idempotent
 
 
 def active_access(db, owner, subject, now):
+    if is_admin(db, owner):
+        return True
     return any(
         r["data"].get("service") == "subscription"
         and r["data"]["starts"] <= now < r["data"]["ends"]
@@ -447,6 +449,8 @@ def register_training(app):
         return {"items": items}
 
     def prerequisites(course, lesson, completed):
+        if g.actor["role"] == "admin":
+            return
         required = set(lesson.get("requires", []))
         modules = {m["id"]: m for m in course["data"].get("modules", [])}
         module = next(
@@ -469,7 +473,7 @@ def register_training(app):
             ),
             None,
         )
-        require(r, "Нет оплаченного доступа к этому курсу", 403)
+        require(r or g.actor["role"] == "admin", "Нет оплаченного доступа к этому курсу", 403)
         course = object_get(g.db, course_id, "course")
         require(course["status"] in ("published", "archived"), "Версия курса недоступна", 403)
         return course
