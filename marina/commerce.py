@@ -26,13 +26,14 @@ def policies(db, type, scope=None):
 
 
 def rights(db, owner, subject=None):
-    return [
+    items = [
         unpack(r)
         for r in db.execute(
             "SELECT * FROM objects WHERE kind='right' AND owner=? AND status='active' AND (? IS NULL OR subject=?)",
             (owner, subject, subject),
         )
     ]
+    return [r for r in items if r["data"].get("access_source") != "admin" or is_admin(db, owner)]
 
 
 def eligible_family(db, owner, selected, policy, now):
@@ -136,6 +137,27 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
         if issue in ("duplicate_payment", "late_payment") and order["status"] != "paid":
             return update(db, order, now, status="paid_review")
         return order
+    result = fulfill(db, order, paid_at, now)
+    audit(
+        db,
+        "provider:" + provider,
+        "payment.confirm",
+        result,
+        now,
+        "Подтверждённое поступление",
+        order["revision"],
+    )
+    return result
+
+
+def is_admin(db, owner):
+    account = db.execute("SELECT role,blocked FROM accounts WHERE id=?", (owner,)).fetchone()
+    return bool(account and account["role"] == "admin" and not account["blocked"])
+
+
+def fulfill(db, order, paid_at, now):
+    """Deliver the immutable order snapshot, independently of financial evidence."""
+    d = order["data"]
     for line in d["lines"]:
         if db.execute(
             "SELECT 1 FROM fulfillments WHERE order_id=? AND line_id=?",
@@ -148,6 +170,7 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
             "product_id": d["product_id"],
             "product_snapshot": d["product_snapshot"],
             "paid_at": paid_at,
+            **({"access_source": "admin"} if d.get("access_source") == "admin" else {}),
         }
         service = d["product_snapshot"]["service"]
         if service in ("subscription", "course"):
@@ -239,14 +262,24 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
         )
         emit(db, order["owner"], obj["id"], "purchase.fulfilled", now)
     result = update(db, order, now, {**d, "paid_at": paid_at}, "paid")
+    return result
+
+
+def admin_fulfill(db, order, actor, now):
+    """Grant admin access without inventing a receipt or calling a payment provider."""
+    require(order["owner"] == actor and is_admin(db, actor), "Требуются права специалиста", 403)
+    if order["status"] == "paid":
+        return order
+    require(order["status"] == "pending", "Заказ недоступен")
+    order = update(db, order, now, {**order["data"], "access_source": "admin"})
+    result = fulfill(db, order, now, now)
     audit(
         db,
-        "provider:" + provider,
-        "payment.confirm",
+        actor,
+        "order.admin_access",
         result,
         now,
-        "Подтверждённое поступление",
-        order["revision"],
+        "Бесплатный доступ по постоянному правилу владельца для администраторов",
     )
     return result
 
@@ -389,11 +422,14 @@ def register_commerce(app):
         surface = d.get("surface")
         require(surface in ("telegram", "web"), "Укажите поверхность покупки")
         require(
-            not (surface == "telegram" and product["currency"] != "XTR"),
+            g.actor["role"] == "admin"
+            or not (surface == "telegram" and product["currency"] != "XTR"),
             "Цифровые покупки в Telegram доступны через Stars",
         )
         require(
-            surface != "web" or product.get("web_sales_approved") is True,
+            g.actor["role"] == "admin"
+            or surface != "web"
+            or product.get("web_sales_approved") is True,
             "Веб-продажи пока не согласованы",
         )
         ids = d.get("subject_ids")
@@ -585,7 +621,11 @@ def register_commerce(app):
                 status="pending",
             )
             audit(g.db, g.actor["id"], "order.create", obj, g.now, "Создан заказ по снимку цены")
-            return obj
+            return (
+                admin_fulfill(g.db, obj, g.actor["id"], g.now)
+                if g.actor["role"] == "admin"
+                else obj
+            )
 
         return idempotent(
             g.db, "order:" + g.actor["id"], d.get("key"), {"quote_id": q["id"]}, create

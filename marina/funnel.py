@@ -316,14 +316,14 @@ def guide_paid(db, order, right, now):
 
 def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     """Use the existing quote/order/receipt pipeline for an age-only guide purchase."""
-    from .commerce import policies
+    from .commerce import is_admin, policies
 
+    admin = is_admin(db, actor)
     run = object_get(db, d.get("run_id"), "funnel_run", actor)
     r = run["data"]
     require(
         run["status"] == "completed"
-        and r.get("offer_expires", 0) > now
-        and not r.get("refused_at"),
+        and (admin or (r.get("offer_expires", 0) > now and not r.get("refused_at"))),
         "Предложение истекло или закрыто",
     )
     require(not r.get("guide_right_id"), "Руководство уже оплачено", 409)
@@ -343,11 +343,11 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
         and p["data"].get("web_sales_approved") is True
     )
     require(
-        surface != "telegram" or p["data"]["currency"] == "XTR" or external_lava,
+        admin or surface != "telegram" or p["data"]["currency"] == "XTR" or external_lava,
         "Внешняя оплата цифрового материала для этой среды не разрешена",
     )
     require(
-        surface != "web" or p["data"].get("web_sales_approved") is True,
+        admin or surface != "web" or p["data"].get("web_sales_approved") is True,
         "Веб-продажи пока не согласованы",
     )
     ops = policies(db, "operations")
@@ -405,7 +405,9 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
         "currency": p["data"]["currency"],
         "provider": "stars" if p["data"]["currency"] == "XTR" else "lava",
         "surface": surface,
-        "expires": min(r["offer_expires"], now + policy["data"]["quote_ttl_seconds"]),
+        "expires": (now + policy["data"]["quote_ttl_seconds"])
+        if admin
+        else min(r["offer_expires"], now + policy["data"]["quote_ttl_seconds"]),
     }
     quote = insert(db, "quote", payload, now, actor, status="valid")
     audit(db, actor, "quote.create", quote, now, "Расчёт покупки возрастного руководства")
@@ -793,18 +795,22 @@ def register_funnel(app):
     @app.post("/api/funnel-runs/<id>/purchase")
     @protected()
     def purchase(id):
-        from .commerce import policies
+        from .commerce import admin_fulfill, policies
 
+        admin = g.actor["role"] == "admin"
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(obj["status"] == "completed", "Сначала завершите скрининг")
         ops = policies(g.db, "operations")
         require(not ops or not ops["data"].get("pause_sales"), "Приём новых заказов приостановлен")
         require(
-            not obj["data"].get("refused_at") and obj["data"].get("offer_expires", 0) > g.now,
+            admin
+            or (not obj["data"].get("refused_at") and obj["data"].get("offer_expires", 0) > g.now),
             "Предложение истекло или закрыто",
         )
         if obj["data"].get("order_id"):
             order = object_get(g.db, obj["data"]["order_id"], "order", g.actor["id"])
+            if admin and order["status"] == "pending":
+                return admin_fulfill(g.db, order, g.actor["id"], g.now)
             if order["status"] == "paid" or (
                 order["status"] == "pending" and order["data"]["expires"] > g.now
             ):
@@ -838,6 +844,11 @@ def register_funnel(app):
                 "checkout_started_at": first,
             },
         )
+        if admin:
+            audit(
+                g.db, g.actor["id"], "order.create", order, g.now, "Заказ возрастного руководства"
+            )
+            return admin_fulfill(g.db, order, g.actor["id"], g.now)
         if first + 1800 < run["data"]["offer_expires"] - 900:
             schedule(g.db, run, "funnel.cart.first", first + 1800)
         if run["data"]["offer_expires"] - 900 > g.now:
@@ -850,7 +861,8 @@ def register_funnel(app):
     def free_pdf(id):
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(
-            obj["status"] == "completed" and obj["data"]["result"]["zone"] == "green",
+            obj["status"] == "completed"
+            and (g.actor["role"] == "admin" or obj["data"]["result"]["zone"] == "green"),
             "Материал доступен после результата зелёной зоны",
             403,
         )
@@ -860,9 +872,14 @@ def register_funnel(app):
     @app.get("/api/guides/<id>/pdf")
     @protected()
     def guide_pdf(id):
-        right = object_get(g.db, id, "right", g.actor["id"])
+        admin = g.actor["role"] == "admin"
+        right = object_get(g.db, id, "right", None if admin else g.actor["id"])
         require(
-            right["status"] == "active" and right["data"].get("service") == "guide",
+            (
+                admin
+                or (right["status"] == "active" and right["data"].get("access_source") != "admin")
+            )
+            and right["data"].get("service") == "guide",
             "Нет доступа к руководству",
             403,
         )
@@ -1282,7 +1299,10 @@ def notify_funnel(app, owner, id, event):
         if event.startswith("funnel.followup"):
             if not d.get("dev_tripwire_accepted_at"):
                 right = object_get(db, d.get("guide_right_id"), "right", owner)
-                if right["status"] != "active":
+                if right["status"] != "active" or (
+                    right["data"].get("access_source") == "admin"
+                    and account["telegram_id"] not in app.config["ADMIN_TELEGRAM_IDS"]
+                ):
                     return
         if event in ("funnel.offer", "funnel.cart.first", "funnel.cart.last"):
             dev_offer = bool(
@@ -1316,7 +1336,10 @@ def notify_funnel(app, owner, id, event):
                 blob = {"body": render_guide(snapshot)}
             else:
                 right = object_get(db, d.get("guide_right_id"), "right", owner)
-                if right["status"] != "active":
+                if right["status"] != "active" or (
+                    right["data"].get("access_source") == "admin"
+                    and account["telegram_id"] not in app.config["ADMIN_TELEGRAM_IDS"]
+                ):
                     return
                 blob = db.execute(
                     "SELECT body FROM blobs WHERE id=?", (right["data"]["asset_id"],)
