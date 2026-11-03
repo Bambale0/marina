@@ -96,6 +96,17 @@ def test_admin_guide_works_without_lava_and_after_offer_expiry(app, tmp_path):
     assert client.get("/api/guides/" + rights[0]["id"] + "/pdf").status_code == 404
     from marina.bot import Bot
 
+    privacy = publish(
+        admin,
+        "policy",
+        {
+            "type": "privacy",
+            "terms": "Synthetic consent",
+            "media_max_bytes": 10000,
+            "retention_days": 30,
+        },
+    )
+    admin.post("/api/consents", json={"policy_id": privacy["id"], "accepted": True})
     bot = Bot(app, {"id": 1, "first_name": "Admin"}, 1, "admin-guide-again")
     bot.action("funnel_buy", {"id": run["id"]})
     assert sent[-1][1]["text"] == "Доступ открыт. Файл будет доставлен в этот чат."
