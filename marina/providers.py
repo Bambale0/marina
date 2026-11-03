@@ -85,6 +85,11 @@ def invoice(app, attempt):
         return {"url": link, "provider_id": None}
     require(type(d["total"]) is int and d["total"] > 0, "Неверная сумма счёта")
     require(d["currency"] == "RUB", "Валюта тарифа не поддерживается")
+    try:
+        amount = d["total"] / 100
+    except OverflowError:
+        raise Problem("Сумма счёта слишком велика", 422)
+    require(Decimal(str(amount)) * 100 == d["total"], "Сумма счёта теряет точность")
     result = lava(
         app,
         "POST",
@@ -93,7 +98,7 @@ def invoice(app, attempt):
             "email": d["email"],
             "offerId": d["offer_id"],
             "currency": "RUB",
-            "amount": d["total"] / 100,
+            "amount": amount,
             "periodicity": "ONE_TIME",
             "clientUtm": {"utm_source": attempt["id"]},
             "successful_return_url": app.config["PUBLIC_URL"] + "/?payment=success",

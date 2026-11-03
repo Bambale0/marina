@@ -33,7 +33,7 @@ def test_lava_invoice_uses_order_snapshot_amount(app, minor_units):
     assert round(payload["amount"] * 100) == minor_units
 
 
-@pytest.mark.parametrize("amount", [0, -1, True, 1.5])
+@pytest.mark.parametrize("amount", [0, -1, True, 1.5, 9007199254740993, 10**500])
 def test_lava_rejects_invalid_snapshot_amount_before_calling_provider(app, amount):
     app.config["HTTP_TRANSPORT"] = lambda *args: pytest.fail("Must not contact provider")
     with pytest.raises(Problem):

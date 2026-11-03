@@ -875,7 +875,11 @@ def register_funnel(app):
         admin = g.actor["role"] == "admin"
         right = object_get(g.db, id, "right", None if admin else g.actor["id"])
         require(
-            (admin or right["status"] == "active") and right["data"].get("service") == "guide",
+            (
+                admin
+                or (right["status"] == "active" and right["data"].get("access_source") != "admin")
+            )
+            and right["data"].get("service") == "guide",
             "Нет доступа к руководству",
             403,
         )
@@ -1295,7 +1299,10 @@ def notify_funnel(app, owner, id, event):
         if event.startswith("funnel.followup"):
             if not d.get("dev_tripwire_accepted_at"):
                 right = object_get(db, d.get("guide_right_id"), "right", owner)
-                if right["status"] != "active":
+                if right["status"] != "active" or (
+                    right["data"].get("access_source") == "admin"
+                    and account["telegram_id"] not in app.config["ADMIN_TELEGRAM_IDS"]
+                ):
                     return
         if event in ("funnel.offer", "funnel.cart.first", "funnel.cart.last"):
             dev_offer = bool(
@@ -1329,7 +1336,10 @@ def notify_funnel(app, owner, id, event):
                 blob = {"body": render_guide(snapshot)}
             else:
                 right = object_get(db, d.get("guide_right_id"), "right", owner)
-                if right["status"] != "active":
+                if right["status"] != "active" or (
+                    right["data"].get("access_source") == "admin"
+                    and account["telegram_id"] not in app.config["ADMIN_TELEGRAM_IDS"]
+                ):
                     return
                 blob = db.execute(
                     "SELECT body FROM blobs WHERE id=?", (right["data"]["asset_id"],)

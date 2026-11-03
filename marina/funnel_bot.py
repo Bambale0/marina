@@ -139,7 +139,11 @@ def handle_action(bot, action, d):
             return True
         order = bot.api("/funnel-runs/" + d["id"] + "/purchase", "POST", {})
         if order["status"] == "paid":
-            bot.send("Руководство оплачено. Файл будет доставлен в этот чат.")
+            bot.send(
+                "Доступ открыт. Файл будет доставлен в этот чат."
+                if order["data"].get("access_source") == "admin"
+                else "Руководство оплачено. Файл будет доставлен в этот чат."
+            )
             return True
         if order["data"]["provider"] == "lava":
             bot.state_set(

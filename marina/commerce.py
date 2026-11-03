@@ -26,13 +26,14 @@ def policies(db, type, scope=None):
 
 
 def rights(db, owner, subject=None):
-    return [
+    items = [
         unpack(r)
         for r in db.execute(
             "SELECT * FROM objects WHERE kind='right' AND owner=? AND status='active' AND (? IS NULL OR subject=?)",
             (owner, subject, subject),
         )
     ]
+    return [r for r in items if r["data"].get("access_source") != "admin" or is_admin(db, owner)]
 
 
 def eligible_family(db, owner, selected, policy, now):
@@ -169,6 +170,7 @@ def fulfill(db, order, paid_at, now):
             "product_id": d["product_id"],
             "product_snapshot": d["product_snapshot"],
             "paid_at": paid_at,
+            **({"access_source": "admin"} if d.get("access_source") == "admin" else {}),
         }
         service = d["product_snapshot"]["service"]
         if service in ("subscription", "course"):
@@ -271,7 +273,14 @@ def admin_fulfill(db, order, actor, now):
     require(order["status"] == "pending", "Заказ недоступен")
     order = update(db, order, now, {**order["data"], "access_source": "admin"})
     result = fulfill(db, order, now, now)
-    audit(db, actor, "order.admin_access", result, now, "Бесплатный доступ администратора")
+    audit(
+        db,
+        actor,
+        "order.admin_access",
+        result,
+        now,
+        "Бесплатный доступ по постоянному правилу владельца для администраторов",
+    )
     return result
 
 

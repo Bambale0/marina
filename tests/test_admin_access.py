@@ -33,6 +33,16 @@ def test_admin_order_fulfills_once_without_payment_or_receipt(app):
             == 0
         )
 
+    app.config["ADMIN_TELEGRAM_IDS"] = set()
+    app.clock[0] += 1
+    former_admin = login(app)
+    assert former_admin.get("/api/me").json["account"]["role"] == "client"
+    from marina.commerce import rights
+
+    owner_id = former_admin.get("/api/me").json["account"]["id"]
+    with connect(app.config["DATABASE"]) as db:
+        assert rights(db, owner_id) == []
+
 
 def test_client_cannot_request_admin_access(app):
     admin, client = login(app), login(app, 2)
@@ -84,6 +94,15 @@ def test_admin_guide_works_without_lava_and_after_offer_expiry(app, tmp_path):
     pdf = admin.get("/api/guides/" + rights[0]["id"] + "/pdf")
     assert pdf.status_code == 200 and pdf.data.startswith(b"%PDF")
     assert client.get("/api/guides/" + rights[0]["id"] + "/pdf").status_code == 404
+    from marina.bot import Bot
+
+    bot = Bot(app, {"id": 1, "first_name": "Admin"}, 1, "admin-guide-again")
+    bot.action("funnel_buy", {"id": run["id"]})
+    assert sent[-1][1]["text"] == "Доступ открыт. Файл будет доставлен в этот чат."
+    app.config["ADMIN_TELEGRAM_IDS"] = set()
+    app.clock[0] += 1
+    former_admin = login(app)
+    assert former_admin.get("/api/guides/" + rights[0]["id"] + "/pdf").status_code == 403
     with connect(app.config["DATABASE"]) as db:
         assert db.execute("SELECT count(*) FROM receipts").fetchone()[0] == 0
         assert (
