@@ -6,6 +6,7 @@ from tests.test_screening import publish, subject
 from tests.test_commerce import policy, product, quote
 from tests.test_funnel import setup_sale, start, finish, drain
 from tests.test_training import exercises
+from tests.funnel_fixtures import configure_funnel_source
 
 
 def test_admin_order_fulfills_once_without_payment_or_receipt(app):
@@ -53,7 +54,8 @@ def test_client_cannot_request_admin_access(app):
         assert db.execute("SELECT count(*) FROM fulfillments").fetchone()[0] == 0
 
 
-def test_admin_guide_works_without_lava_and_after_offer_expiry(app):
+def test_admin_guide_works_without_lava_and_after_offer_expiry(app, tmp_path):
+    configure_funnel_source(app, tmp_path)
     app.config.update(
         DEV_EXTERNAL_LAVA_CHECKOUT=True,
         LAVA_API_KEY="fixture",
@@ -64,6 +66,9 @@ def test_admin_guide_works_without_lava_and_after_offer_expiry(app):
         app, currency="RUB", lava_offer_id="fixture-offer", web_sales_approved=True
     )
     run = finish(admin, start(admin, "3-4"), ["b"] * 6)
+    drain(app)
+    app.clock[0] += 30
+    drain(app)
     app.clock[0] += 8000
     app.config.update(LAVA_API_KEY="", LAVA_WEBHOOK_SECRET="", DEV_EXTERNAL_LAVA_CHECKOUT=False)
     response = admin.post("/api/funnel-runs/" + run["id"] + "/purchase", json={})
