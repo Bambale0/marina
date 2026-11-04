@@ -365,10 +365,16 @@ def process_payment_event(app, event_id, now):
                 (p["provider_id"],),
             ).fetchone()
             if row:
-                check_lava(app, db, unpack(row), now)
+                verification = check_lava(app, db, unpack(row), now)
                 if not db.execute(
                     "SELECT 1 FROM receipts WHERE provider='lava' AND charge=?", (p["provider_id"],)
                 ).fetchone():
+                    require(
+                        str(verification.get("status", "unknown")).lower()
+                        in ("pending", "unknown"),
+                        "Статус платежа требует ручной проверки",
+                        409,
+                    )
                     return False
                 for pending in db.execute(
                     "SELECT * FROM objects WHERE kind='reconciliation' AND status='open' "
