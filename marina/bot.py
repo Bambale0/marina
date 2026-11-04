@@ -1639,14 +1639,17 @@ class Bot:
             self.admin_audit(d.get("offset", 0))
         elif action == "queue":
             self.require_admin()
-            items = self.api("/admin/queue")["items"]
-            self.send(
-                "Очередь специалиста." if items else "Очередь пуста.",
-                [
-                    (o["kind"] + " · " + o["status"], "admin_card", {"id": o["id"]})
-                    for o in items[:30]
-                ],
-            )
+            start = max(0, int(d.get("offset", 0)))
+            page = self.api("/admin/queue?offset=" + str(start))
+            items = page["items"][:30]
+            buttons = [
+                (o["kind"] + " · " + o["status"], "admin_card", {"id": o["id"]}) for o in items
+            ]
+            if start:
+                buttons.append(("⬅️ Назад", "queue", {"offset": max(0, start - 30)}))
+            if start + 30 < page["total"]:
+                buttons.append(("Далее ➡️", "queue", {"offset": start + 30}))
+            self.send("Очередь специалиста." if items else "Очередь пуста.", buttons)
         elif action == "admin_card":
             self.require_admin()
             self.admin_card(d["id"])

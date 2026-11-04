@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 from flask import g, request
 from . import Problem, body, object_get, protected, reason, require
-from .commerce import confirm
+from .commerce import checkout_open, confirm
 from .db import audit, emit, insert, transaction, unpack, update
 
 
@@ -157,7 +157,7 @@ def register_providers(app):
 
             return admin_fulfill(g.db, o, g.actor["id"], g.now)
         require(
-            o["status"] == "pending" and o["data"]["expires"] > g.now,
+            checkout_open(g.db, o, g.now),
             "Счёт уже оплачен или истёк",
         )
         row = g.db.execute(

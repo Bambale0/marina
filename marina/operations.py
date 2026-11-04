@@ -128,11 +128,23 @@ def work_once(app, send=None):
             "invoice.create",
             "refund.create",
         )
+        if event["event"] == "invoice.create" and event["status"] == "pending":
+            from .commerce import checkout_open
+
+            attempt = object_get(db, event["object_id"], "payment_attempt")
+            order = object_get(db, attempt["data"]["order_id"], "order")
+            if attempt["status"] == "queued" and not checkout_open(db, order, now):
+                update(db, attempt, now, status="cancelled")
+                db.execute(
+                    "UPDATE outbox SET status='cancelled',leased_until=NULL WHERE id=?",
+                    (event["id"],),
+                )
+                return 1
         db.execute(
             "UPDATE outbox SET status='processing',attempts=attempts+1,leased_until=? WHERE id=?",
             (now + 60, event["id"]),
         )
-    outcome, result = "sent", None
+    outcome, result, awaiting_payment = "sent", None, False
     try:
         if event["event"] == "invoice.create":
             from .providers import invoice
@@ -151,7 +163,12 @@ def work_once(app, send=None):
         elif event["event"] == "payment.process":
             from .commerce import process_payment_event
 
-            process_payment_event(app, event["object_id"], now)
+            awaiting_payment = process_payment_event(app, event["object_id"], now) is False
+            require(
+                not awaiting_payment,
+                "Подтверждение платежа ещё не получено",
+                503,
+            )
         elif event["event"] == "ai.generate":
             from .ai import generate
 
@@ -274,7 +291,11 @@ def work_once(app, send=None):
                 update(db, job, now, status="failed")
         else:
             state = (
-                "sent" if outcome == "sent" else "failed" if current["attempts"] >= 8 else "pending"
+                "sent"
+                if outcome == "sent"
+                else "failed"
+                if current["attempts"] >= 8 and not awaiting_payment
+                else "pending"
             )
         if event["event"] == "crm.message":
             from .crm import message_delivery
@@ -282,7 +303,7 @@ def work_once(app, send=None):
             message_delivery(db, event, now, outcome == "sent")
         db.execute(
             "UPDATE outbox SET status=?,available=?,leased_until=NULL WHERE id=?",
-            (state, now + min(3600, 2 ** current["attempts"] * 10), event["id"]),
+            (state, now + min(3600, 2 ** min(current["attempts"], 9) * 10), event["id"]),
         )
     return 1
 
@@ -414,10 +435,28 @@ def register_operations(app):
     @app.get("/api/admin/queue")
     @protected(admin=True)
     def queue():
+        start = offset()
+        where = (
+            "kind IN ('video_review','report','case','booking','reconciliation',"
+            "'data_request','ai_job','refund','payment_event','retention_task') "
+            "AND status NOT IN ('published','closed','completed','cancelled',"
+            "'resolved','processed','confirmed')"
+        )
+        due_sql = (
+            "CASE WHEN kind='video_review' THEN json_extract(data,'$.next_contact') "
+            "WHEN status='followup_pending' THEN json_extract(data,'$.followup.due_at') "
+            "ELSE json_extract(data,'$.due_at') END"
+        )
+        total = g.db.execute("SELECT count(*) FROM objects WHERE " + where).fetchone()[0]
         rows = [
-            unpack(r)
-            for r in g.db.execute(
-                "SELECT * FROM objects WHERE kind IN ('video_review','report','case','booking','reconciliation','data_request','ai_job','refund','payment_event','retention_task') AND status NOT IN ('published','closed','completed','cancelled','resolved','processed','confirmed') ORDER BY created,id LIMIT 200"
+            unpack(row)
+            for row in g.db.execute(
+                "SELECT * FROM objects WHERE "
+                + where
+                + " ORDER BY COALESCE("
+                + due_sql
+                + ",1152921504606846976),created,id LIMIT 200 OFFSET ?",
+                (start,),
             )
         ]
         for obj in rows:
@@ -429,7 +468,7 @@ def register_operations(app):
                 else obj["data"].get("due_at")
             )
             obj.update(due_at=due, overdue=bool(due and due < g.now))
-        return {"items": sorted(rows, key=lambda o: o["due_at"] or 2**60)}
+        return {"items": rows, "total": total, "offset": start}
 
     @app.post("/api/admin/outbox/<id>/retry")
     @protected(admin=True)

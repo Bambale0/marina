@@ -155,6 +155,21 @@ def is_admin(db, owner):
     return bool(account and account["role"] == "admin" and not account["blocked"])
 
 
+def checkout_open(db, order, now):
+    """New invoice eligibility only; received money still goes through confirm."""
+    if order["status"] != "pending" or order["data"]["expires"] <= now:
+        return False
+    run_id = order["data"].get("run_id")
+    if not run_id:
+        return True
+    run = object_get(db, run_id, "funnel_run", order["owner"])
+    return bool(
+        run["status"] == "completed"
+        and not run["data"].get("refused_at")
+        and run["data"].get("offer_expires", 0) > now
+    )
+
+
 def fulfill(db, order, paid_at, now):
     """Deliver the immutable order snapshot, independently of financial evidence."""
     d = order["data"]
@@ -351,18 +366,56 @@ def process_payment_event(app, event_id, now):
             ).fetchone()
             if row:
                 check_lava(app, db, unpack(row), now)
+                if not db.execute(
+                    "SELECT 1 FROM receipts WHERE provider='lava' AND charge=?", (p["provider_id"],)
+                ).fetchone():
+                    return False
+                for pending in db.execute(
+                    "SELECT * FROM objects WHERE kind='reconciliation' AND status='open' "
+                    "AND json_extract(data,'$.issue')='unmatched_lava_invoice' "
+                    "AND json_extract(data,'$.payment_event_id')=?",
+                    (event["id"],),
+                ).fetchall():
+                    issue = unpack(pending)
+                    resolved = update(
+                        db,
+                        issue,
+                        now,
+                        {
+                            **issue["data"],
+                            "resolved_at": now,
+                            "resolution": "invoice_matched",
+                            "payment_attempt_id": row["id"],
+                        },
+                        "resolved",
+                    )
+                    audit(
+                        db,
+                        "provider:lava",
+                        "payment.reconciliation_resolved",
+                        resolved,
+                        now,
+                        "Счёт сопоставлен; поступление записано",
+                        issue["revision"],
+                    )
             else:
-                insert(
-                    db,
-                    "reconciliation",
-                    {
-                        "issue": "unmatched_lava_invoice",
-                        "provider_id": p["provider_id"],
-                        "payment_event_id": event["id"],
-                    },
-                    now,
-                    status="open",
-                )
+                existing = db.execute(
+                    "SELECT 1 FROM objects WHERE kind='reconciliation' AND json_extract(data,'$.payment_event_id')=?",
+                    (event["id"],),
+                ).fetchone()
+                if not existing:
+                    insert(
+                        db,
+                        "reconciliation",
+                        {
+                            "issue": "unmatched_lava_invoice",
+                            "provider_id": p["provider_id"],
+                            "payment_event_id": event["id"],
+                        },
+                        now,
+                        status="open",
+                    )
+                return False
         update(db, event, now, status="processed")
 
 
@@ -830,7 +883,7 @@ def register_commerce(app):
                     o
                     and expected == p.get("from", {}).get("id")
                     and o["status"] == "pending"
-                    and o["data"]["expires"] > g.now
+                    and checkout_open(db, o, g.now)
                     and o["data"]["total"] == p.get("total_amount")
                     and p.get("currency") == "XTR"
                 )

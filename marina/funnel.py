@@ -28,7 +28,11 @@ WELCOME = """Здравствуйте, {name}!
 ❌ «Она делает назло и не слушает с первого раза»
 ❌ «Учителя жалуются, что он витает в облаках»
 
-Этот скрининг поможет обратить внимание на сложности с саморегуляцией, утомляемостью и обработкой информации.
+В 9 из 10 случаев дело не в характере и не в лени. Просто определенные отделы мозга
+(лобные доли, мозжечок, ствол) сейчас перегружены или не успевают созревать.
+
+Этот скрининг покажет, где именно тонкое место у вашего ребенка: в саморегуляции,
+утомляемости мозга или обработке информации.
 
 ⏳ Время прохождения: 3 минуты (всего 6 вопросов).
 🔒 Тест имеет ориентировочный характер, не является медицинским диагнозом, но подсветит зоны риска, требующие внимания.
@@ -38,24 +42,18 @@ AGE_REMINDER = """{name}, отвлеклись? Понимаю, с детьми 
 Тест займет всего 3 минуты, а результаты помогут сберечь километры ваших нервов при выполнении уроков и домашних дел.
 Какого возраста ваш ребенок? Жмите кнопку ниже ⬇️"""
 PROFILE = {
-    "name": "Нейро-Скрининг | Савельева Марина",
+    "name": "Нейро-Скрининг: почему ребенок не слушается и трудно учится",
     "description": "Пройдите экспресс-тест от нейропсихолога и дефектолога за 3 минуты.\n"
-    "Узнайте причины сложностей с поведением, вниманием и речью вашего ребенка.\n"
+    "Узнайте реальные причины сложностей с поведением, вниманием и речью вашего ребенка.\n"
     "Нажмите кнопку «СТАРТ» внизу ⬇️",
 }
-RESULT_WAIT_SECONDS = 30
-PROGRESS_STEPS = (0, 20, 40, 60, 80, 100)
-DEFAULT_TRIPWIRE_DELAY_SECONDS = 3 * 60
+RESULT_WAIT_SECONDS = 3
+PROGRESS_STEPS = (0,)
+DEFAULT_TRIPWIRE_DELAY_SECONDS = 2
 
 
 def progress_text(percent):
-    filled = percent // 10
-    return (
-        "Обрабатываю ваши ответы и готовлю результат…\n\n"
-        + "🟩" * filled
-        + "⬜" * (10 - filled)
-        + f" {percent}%"
-    )
+    return "Обрабатываю ваши ответы и строю нейропрофиль... ⏳"
 
 
 def price_text(product):
@@ -172,6 +170,22 @@ def validate_funnel(d):
         all(isinstance(f.get("text"), str) and 1 <= len(f["text"]) <= 16000 for f in followups),
         "Проверьте тексты касаний",
     )
+    for followup in followups:
+        if "button_label" in followup:
+            require(
+                isinstance(followup["button_label"], str)
+                and 1 <= len(followup["button_label"]) <= 120,
+                "Проверьте подпись кнопки касания",
+            )
+        require(
+            followup.get("button_action", "info") in ("info", "book"), "Проверьте действие касания"
+        )
+        if "support_label" in followup:
+            require(
+                isinstance(followup["support_label"], str)
+                and 1 <= len(followup["support_label"]) <= 120,
+                "Проверьте подпись кнопки связи",
+            )
     require(
         type(d.get("tripwire_delay_seconds")) is int
         and 0 <= d["tripwire_delay_seconds"] <= 24 * 60 * 60,
@@ -236,9 +250,51 @@ def material_asset(db, material_id, mimes=("application/pdf",)):
     return obj, row
 
 
+def owned_guide(db, owner, group, admin=False):
+    """An active entitlement suppresses repeat sales of this age-family guide."""
+    rows = db.execute(
+        "SELECT * FROM objects WHERE kind='right' AND owner=? AND status='active' "
+        "AND json_extract(data,'$.service')='guide' "
+        "AND json_extract(data,'$.product_snapshot.age_group')=? "
+        "ORDER BY created DESC,id DESC",
+        (owner, group),
+    )
+    for row in rows:
+        right = unpack(row)
+        if right["data"].get("access_source") != "admin" or admin:
+            return right
+    return None
+
+
+def result_buttons(obj, prior_guide=None):
+    """Use the same result navigation for the first delivery and resume."""
+    data = obj["data"]
+    snapshot = data.get("snapshot", {})
+    values = {"id": obj["id"]}
+    zone = data.get("result", {}).get("zone")
+    if prior_guide and zone == "yellow":
+        return [("📄 Открыть руководство", "funnel_owned", {"right_id": prior_guide["id"]})]
+    if zone == "green":
+        if snapshot.get("free_material_id"):
+            return [("🎁 Игры по возрасту — PDF", "funnel_free", values)]
+        if snapshot.get("channel_url"):
+            return [("📚 Полезные материалы", "url", {"url": snapshot["channel_url"]})]
+    if zone == "red":
+        return [
+            ("📋 Что входит в диагностику", "funnel_consultation", values),
+            ("📅 Записаться на диагностику", "funnel_book", values),
+        ]
+    return []
+
+
 def public_run(obj):
     obj = copy.deepcopy(obj)
     d = obj["data"]
+    if obj["status"] == "completed" and "snapshot" in d:
+        prior = owned_guide(
+            g.db, obj["owner"], d.get("child_age"), admin=g.actor["role"] == "admin"
+        )
+        d["result_buttons"] = result_buttons(obj, prior)
     snapshot = d.pop("snapshot", {})
     d.pop("approval", None)
     d.pop("progress_message_id", None)
@@ -514,6 +570,10 @@ def register_funnel(app):
             require(
                 content, "Скрининг для этого возраста готовится. Можно обратиться к специалисту."
             )
+            snapshot = copy.deepcopy(content["data"])
+            if snapshot.get("free_material_id"):
+                _, free_asset = material_asset(g.db, snapshot["free_material_id"])
+                snapshot["free_asset_id"] = free_asset["id"]
             # One active questionnaire per account. Old buttons cannot answer a new run.
             for row in g.db.execute(
                 "SELECT * FROM objects WHERE kind='funnel_run' AND owner=? AND status='in_progress'",
@@ -527,7 +587,7 @@ def register_funnel(app):
                 {
                     "child_age": group,
                     "content_id": content["id"],
-                    "snapshot": content["data"],
+                    "snapshot": snapshot,
                     "answers": {},
                     "tags": ["status:screening_started"],
                     "order_status": None,
@@ -570,6 +630,14 @@ def register_funnel(app):
                 {**entry["data"], "child_age": obj["data"]["child_age"]},
                 "age_selected",
             )
+        if obj["data"].get("owned_guide_id") and not owned_guide(
+            g.db, g.actor["id"], obj["data"].get("child_age"), admin=g.actor["role"] == "admin"
+        ):
+            data = dict(obj["data"])
+            data.pop("owned_guide_id", None)
+            obj = update(g.db, obj, g.now, data)
+            if data.get("result", {}).get("zone") == "yellow":
+                emit(g.db, obj["owner"], obj["id"], "funnel.offer", g.now)
         return public_run(obj)
 
     @app.post("/api/funnel-runs/<id>/answer")
@@ -800,6 +868,10 @@ def register_funnel(app):
         admin = g.actor["role"] == "admin"
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(obj["status"] == "completed", "Сначала завершите скрининг")
+        prior = owned_guide(g.db, g.actor["id"], obj["data"]["child_age"], admin=admin)
+        if prior:
+            existing = object_get(g.db, prior["data"]["order_id"], "order", g.actor["id"])
+            return {**existing, "existing_guide_right_id": prior["id"]}
         ops = policies(g.db, "operations")
         require(not ops or not ops["data"].get("pause_sales"), "Приём новых заказов приостановлен")
         require(
@@ -866,7 +938,15 @@ def register_funnel(app):
             "Материал доступен после результата зелёной зоны",
             403,
         )
-        _, blob = material_asset(g.db, obj["data"]["snapshot"].get("free_material_id"))
+        snapshot = obj["data"]["snapshot"]
+        if snapshot.get("free_asset_id"):
+            blob = g.db.execute(
+                "SELECT body FROM blobs WHERE id=? AND case_id=? AND mime='application/pdf'",
+                (snapshot["free_asset_id"], snapshot["free_material_id"]),
+            ).fetchone()
+            require(blob, "Файл недоступен", 404)
+        else:
+            _, blob = material_asset(g.db, snapshot.get("free_material_id"))
         return Response(blob["body"], mimetype="application/pdf")
 
     @app.get("/api/guides/<id>/pdf")
@@ -1268,6 +1348,7 @@ def notify_funnel(app, owner, id, event):
     now = int(app.config["CLOCK"]())
     dev_offer = False
     dev_delivery = False
+    prior_guide = None
     with connect(app.config["DATABASE"]) as db:
         obj = object_get(db, id, owner=owner)
         account = db.execute("SELECT * FROM accounts WHERE id=?", (owner,)).fetchone()
@@ -1304,30 +1385,54 @@ def notify_funnel(app, owner, id, event):
                     and account["telegram_id"] not in app.config["ADMIN_TELEGRAM_IDS"]
                 ):
                     return
-        if event in ("funnel.offer", "funnel.cart.first", "funnel.cart.last"):
-            dev_offer = bool(
-                event == "funnel.offer"
-                and app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
-                and not snapshot.get("guide_product_id")
+        if event == "funnel.result":
+            prior_guide = owned_guide(
+                db,
+                owner,
+                d.get("child_age"),
+                admin=account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"],
             )
-            if dev_offer:
-                price = "будет указана позже"
-            else:
-                if not snapshot.get("guide_product_id"):
-                    return
-                product = object_get(db, snapshot["guide_product_id"], "product")
-                external_lava = lava_guide_ready(app, product)
-                if product["status"] != "published" or not (
-                    product["data"].get("currency") == "XTR" or external_lava
-                ):
-                    return
-                price = price_text(product)
-            if event != "funnel.offer" and now >= d.get("offer_expires", 0):
+        if event in ("funnel.offer", "funnel.cart.first", "funnel.cart.last"):
+            prior_guide = owned_guide(
+                db,
+                owner,
+                d.get("child_age"),
+                admin=account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"],
+            )
+            if prior_guide and event.startswith("funnel.cart"):
                 return
-            if event.startswith("funnel.cart"):
-                order = object_get(db, d.get("order_id"), "order", owner)
-                if order["status"] != "pending":
+            if not prior_guide:
+                dev_offer = bool(
+                    event == "funnel.offer"
+                    and app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
+                    and not snapshot.get("guide_product_id")
+                )
+                if dev_offer:
+                    price = "будет указана позже"
+                else:
+                    if not snapshot.get("guide_product_id"):
+                        return
+                    product = object_get(db, snapshot["guide_product_id"], "product")
+                    external_lava = lava_guide_ready(app, product)
+                    if product["status"] != "published" or not (
+                        product["data"].get("currency") == "XTR" or external_lava
+                    ):
+                        return
+                    price = price_text(product)
+                if event != "funnel.offer" and now >= d.get("offer_expires", 0):
                     return
+                if event.startswith("funnel.cart"):
+                    order = object_get(db, d.get("order_id"), "order", owner)
+                    if order["status"] != "pending":
+                        return
+                    price = price_text(
+                        {
+                            "data": {
+                                "amount": order["data"]["total"],
+                                "currency": order["data"]["currency"],
+                            }
+                        }
+                    )
         if event == "funnel.guide":
             dev_delivery = bool(d.get("dev_tripwire_accepted_at"))
             if d.get("guide_delivered_at"):
@@ -1377,6 +1482,9 @@ def notify_funnel(app, owner, id, event):
         if d.get("result_sent_at"):
             return
         step = int(event.rsplit(".", 1)[-1])
+        # Old six-step jobs may remain queued during the deployment.
+        if 0 < step <= 5 and len(PROGRESS_STEPS) == 1:
+            return
         require(0 <= step < len(PROGRESS_STEPS), "Некорректный шаг обработки")
         message_id = d.get("progress_message_id")
         if message_id:
@@ -1399,9 +1507,7 @@ def notify_funnel(app, owner, id, event):
             )
     elif event == "funnel.result":
         text = d["result"]["text"] + "\n\n" + d["result"]["limitations"]
-        buttons = []
-        if d["result"]["zone"] == "green" and snapshot.get("free_material_id"):
-            buttons.insert(0, ("🎁 Игры по возрасту — PDF", "funnel_free", values))
+        buttons = result_buttons(obj, prior_guide)
         if d.get("progress_message_id"):
             bot.edit(d["progress_message_id"], text, buttons)
         else:
@@ -1420,6 +1526,18 @@ def notify_funnel(app, owner, id, event):
                     now + snapshot.get("tripwire_delay_seconds", DEFAULT_TRIPWIRE_DELAY_SECONDS),
                 )
     elif event == "funnel.offer":
+        if prior_guide:
+            bot.send(
+                "Руководство для этого возраста уже доступно Вам.",
+                [
+                    ("📄 Открыть руководство", "funnel_owned", {"right_id": prior_guide["id"]}),
+                ],
+            )
+            with transaction(app.config["DATABASE"]) as db:
+                current = object_get(db, id)
+                update(db, current, now, {**current["data"], "owned_guide_id": prior_guide["id"]})
+                cancel(db, current, ("funnel.cart",))
+            return
         expires = d.get("offer_expires", now + 7200)
         if expires <= now:
             return
@@ -1450,10 +1568,27 @@ def notify_funnel(app, owner, id, event):
             render_copy(text, snapshot, account["name"], price=price),
             [
                 ("💳 Завершить оплату", "funnel_buy", values),
-                ("🆘 Помощь с оплатой", "funnel_consultation", values),
+                *(
+                    [("🆘 Помощь с оплатой", "url", {"url": snapshot["contact_url"]})]
+                    if snapshot.get("contact_url")
+                    else []
+                ),
             ],
         )
     elif event == "funnel.guide":
+        if not d.get("guide_success_sent_at"):
+            if dev_delivery:
+                message = "Тестовый PDF готов. Оплата не выполнялась."
+            elif right["data"].get("access_source") == "admin":
+                message = (
+                    "Руководство доступно без оплаты. PDF будет отправлен следующим сообщением."
+                )
+            else:
+                message = render_copy(snapshot["success_text"], snapshot, account["name"])
+            bot.send(message, consult)
+            with transaction(app.config["DATABASE"]) as db:
+                current = object_get(db, id)
+                update(db, current, now, {**current["data"], "guide_success_sent_at": now})
         if not d.get("guide_file_sent_at"):
             send_file(
                 app,
@@ -1465,14 +1600,6 @@ def notify_funnel(app, owner, id, event):
             with transaction(app.config["DATABASE"]) as db:
                 current = object_get(db, id)
                 update(db, current, now, {**current["data"], "guide_file_sent_at": now})
-        bot.send(
-            (
-                "Тестовый PDF готов. Оплата не выполнялась."
-                if dev_delivery
-                else render_copy(snapshot["success_text"], snapshot, account["name"])
-            ),
-            consult,
-        )
         with transaction(app.config["DATABASE"]) as db:
             current = object_get(db, id)
             current = update(
@@ -1502,8 +1629,37 @@ def notify_funnel(app, owner, id, event):
         deadline = datetime.fromtimestamp(
             d["consultation_expires"], ZoneInfo(snapshot["timezone"])
         ).strftime("%d.%m.%Y в %H:%M")
-        text = next(f["text"] for f in snapshot["followups"] if f["hours"] == hours)
-        bot.send(render_copy(text, snapshot, account["name"], deadline=deadline), consult)
+        followup = next(f for f in snapshot["followups"] if f["hours"] == hours)
+        copy_values = {
+            "deadline": deadline,
+            "consultation_price": str(snapshot["consultation_amount_rub"]) + " ₽",
+            "consultation_discount": (
+                snapshot["consultation_regular_rub"] - snapshot["consultation_amount_rub"]
+            )
+            * 100
+            // snapshot["consultation_regular_rub"],
+        }
+        buttons = [
+            (
+                render_copy(
+                    followup.get("button_label", "📋 О диагностике"),
+                    snapshot,
+                    account["name"],
+                    **copy_values,
+                ),
+                "funnel_book" if followup.get("button_action") == "book" else "funnel_consultation",
+                values,
+            )
+        ]
+        if snapshot.get("contact_url"):
+            buttons.append(
+                (
+                    followup.get("support_label", "💬 Написать Марине"),
+                    "url",
+                    {"url": snapshot["contact_url"]},
+                )
+            )
+        bot.send(render_copy(followup["text"], snapshot, account["name"], **copy_values), buttons)
     elif event == "funnel.refusal":
         video = blob["mime"] == "video/mp4"
         send_file(

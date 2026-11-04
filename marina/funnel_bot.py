@@ -73,7 +73,10 @@ def handle_action(bot, action, d):
         run = bot.api("/funnel-runs/" + id + "/resume", "POST", {})
         if run["status"] == "completed":
             result = run["data"]["result"]
-            bot.send(result["text"] + "\n\n" + result["limitations"])
+            bot.send(
+                result["text"] + "\n\n" + result["limitations"],
+                run["data"].get("result_buttons", []),
+            )
         else:
             show_question(bot, run)
     elif action == "funnel_age":
@@ -138,6 +141,15 @@ def handle_action(bot, action, d):
         if not bot.privacy_gate("funnel_buy", {"id": d["id"]}):
             return True
         order = bot.api("/funnel-runs/" + d["id"] + "/purchase", "POST", {})
+        if order.get("existing_guide_right_id"):
+            bot.send(
+                "Доступ открыт. Файл будет доставлен в этот чат."
+                if order["data"].get("access_source") == "admin"
+                else "Руководство уже оплачено. Отправляю ваш файл."
+            )
+            return handle_action(
+                bot, "funnel_owned", {"right_id": order["existing_guide_right_id"]}
+            )
         if order["status"] == "paid":
             bot.send(
                 "Доступ открыт. Файл будет доставлен в этот чат."
@@ -155,6 +167,12 @@ def handle_action(bot, action, d):
             return True
         attempt = bot.api("/orders/" + order["id"] + "/checkout", "POST", {})
         show_checkout(bot, attempt)
+    elif action == "funnel_owned":
+        from .bot import send_file
+
+        response = bot.client.get("/api/guides/" + d["right_id"] + "/pdf")
+        require(response.status_code == 200, (response.json or {}).get("error", "Файл недоступен"))
+        send_file(bot.app, bot.chat, "guide.pdf", response.data, "application/pdf")
     elif action == "funnel_free":
         from .bot import send_file
 
