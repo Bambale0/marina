@@ -51,37 +51,64 @@ def finish(client, run, values):
     return run
 
 
-def test_result_waits_three_seconds_and_edits_one_progress_message(app):
-    # The supplied owner document replaces the former 30-second preview contract.
+def test_result_waits_30_seconds_and_edits_one_progress_message(app):
     admin, owner = login(app), login(app, 2)
     scenario(admin)
     calls = []
 
     def transport(method, url, data, headers):
-        calls.append((url.rsplit("/", 1)[-1], data))
+        telegram_method = url.rsplit("/", 1)[-1]
+        calls.append((telegram_method, data))
         return {"ok": True, "result": {"message_id": 77}}
 
     app.config["HTTP_TRANSPORT"] = transport
     run = finish(owner, start(owner), ["b"] * 6)
+    completed_at = run["data"]["completed_at"]
     with connect(app.config["DATABASE"]) as db:
-        rows = db.execute(
+        events = db.execute(
             "SELECT event,available FROM outbox WHERE object_id=? ORDER BY available,event",
             (run["id"],),
         ).fetchall()
-    assert [(r["event"], r["available"] - run["data"]["completed_at"]) for r in rows] == [
+    assert [(row["event"], row["available"] - completed_at) for row in events] == [
         ("funnel.progress.0", 0),
-        ("funnel.result", 3),
+        ("funnel.progress.1", 5),
+        ("funnel.progress.2", 10),
+        ("funnel.progress.3", 15),
+        ("funnel.progress.4", 20),
+        ("funnel.progress.5", 25),
+        ("funnel.result", 30),
     ]
+
     drain(app)
-    assert len(calls) == 1 and calls[0][0] == "sendMessage"
-    app.clock[0] += 2
+    assert calls == [
+        (
+            "sendMessage",
+            {
+                "chat_id": 2,
+                "text": "Обрабатываю ваши ответы и готовлю результат…\n\n⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0%",
+            },
+        )
+    ]
+    visible = owner.get("/api/funnel-runs/" + run["id"]).json
+    assert "progress_message_id" not in visible["data"]
+    assert "progress_percent" not in visible["data"]
+    for percent in (20, 40, 60, 80, 100):
+        app.clock[0] += 5
+        drain(app)
+        assert calls[-1][0] == "editMessageText"
+        assert calls[-1][1]["message_id"] == 77
+        assert calls[-1][1]["text"].endswith(
+            "🟩" * (percent // 10) + "⬜" * (10 - percent // 10) + f" {percent}%"
+        )
+    app.clock[0] += 4
     drain(app)
-    assert len(calls) == 1
+    assert not any("ИТОГ СКРИНИНГА" in call[1].get("text", "") for call in calls)
     app.clock[0] += 1
     drain(app)
-    assert calls[-1][0] == "editMessageText" and calls[-1][1]["message_id"] == 77
+    assert calls[-1][0] == "editMessageText"
+    assert calls[-1][1]["message_id"] == 77
     assert "ИТОГ СКРИНИНГА" in calls[-1][1]["text"]
-    assert "progress_message_id" not in owner.get("/api/funnel-runs/" + run["id"]).json["data"]
+    assert len([call for call in calls if call[0] == "sendMessage"]) == 1
 
 
 @pytest.mark.parametrize("group", ["3-4", "5-6", "7-9", "10-14"])
@@ -1262,3 +1289,18 @@ def test_refusal_can_deliver_the_configured_free_video(app, tmp_path):
     drain(app)
     assert len(files) == 1
     assert files[0][2] == raw and files[0][4] == "sendVideo"
+
+
+def test_default_tripwire_delay_is_three_minutes(app):
+    import json
+    from pathlib import Path
+
+    path = Path(app.config["FUNNEL_SOURCE_PATH"])
+    data = json.loads(path.read_text())
+    for scenario in data.values():
+        scenario.pop("tripwire_delay_seconds", None)
+    path.write_text(json.dumps(data))
+    admin = login(app)
+    response = admin.get("/api/admin/funnel-defaults/3-4")
+    assert response.status_code == 200
+    assert response.json["tripwire_delay_seconds"] == 180

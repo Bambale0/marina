@@ -18,7 +18,7 @@ def repeat_buyer(app):
     assert pay(app, order).status_code == 200
     drain(app)
     again = finish(owner, start(owner, key="followthrough-repeat"), ["b"] * 6)
-    app.clock[0] += 3
+    app.clock[0] += 30
     drain(app)
     return admin, owner, again, product, sent
 
@@ -86,8 +86,8 @@ def lava_sale(app):
         calls.append(method)
         if method == "POST":
             return {"id": "followthrough-invoice", "paymentUrl": "https://example.test/pay"}
-        if state["mode"] == "pending":
-            return {"id": "followthrough-invoice", "status": "pending"}
+        if state["mode"] in ("pending", "failed"):
+            return {"id": "followthrough-invoice", "status": state["mode"]}
         return {
             "id": "followthrough-invoice",
             "status": "completed",
@@ -153,7 +153,7 @@ def test_invoice_matched_after_callback_resolves_only_its_reconciliation(app):
     assert len(files) == 1
 
 
-@pytest.mark.parametrize("mode", ["invalid", "pending"])
+@pytest.mark.parametrize("mode", ["invalid", "pending", "failed"])
 def test_payment_retries_distinguish_invalid_from_nonterminal_receipts(app, mode):
     owner, order, state, calls, event, files = lava_sale(app)
     assert (
@@ -170,8 +170,8 @@ def test_payment_retries_distinguish_invalid_from_nonterminal_receipts(app, mode
         app.clock[0] += 3600
     with connect(app.config["DATABASE"]) as db:
         job = dict(db.execute("SELECT * FROM outbox WHERE event='payment.process'").fetchone())
-    assert job["status"] == ("failed" if mode == "invalid" else "pending")
-    assert job["attempts"] == (8 if mode == "invalid" else 10)
+    assert job["status"] == ("pending" if mode == "pending" else "failed")
+    assert job["attempts"] == (10 if mode == "pending" else 8)
     if mode == "pending":
         state["mode"] = "completed"
         drain(app)
