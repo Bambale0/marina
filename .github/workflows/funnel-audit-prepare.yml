@@ -1,0 +1,60 @@
+name: Prepare audited funnel fixes
+on:
+  push:
+    branches: ['fix/funnel-doc-release-20261104']
+    paths: ['scripts/prepare_funnel_release.py', '.github/workflows/funnel-audit-prepare.yml']
+permissions:
+  contents: write
+concurrency:
+  group: marina-funnel-audit-prepare
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'Bambale0/marina' && github.ref == 'refs/heads/fix/funnel-doc-release-20261104'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/funnel-doc-release-20261104
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Capture failing regressions before the fix
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q tests/test_funnel_release_regressions.py --tb=short > /tmp/funnel-red.log 2>&1
+          result=$?
+          cat /tmp/funnel-red.log
+          test "$result" -eq 1 || exit 1
+          grep -Eq '[0-9]+ failed' /tmp/funnel-red.log || exit 1
+          if grep -Eq 'ERROR collecting|INTERNALERROR' /tmp/funnel-red.log; then exit 1; fi
+      - name: Apply the bounded source patch
+        run: python scripts/prepare_funnel_release.py --apply
+      - name: Format and verify the exact resulting files
+        run: |
+          ruff format marina tests
+          python -m pytest -q
+          python -m compileall -q marina
+          ruff check marina
+          ruff format --check marina tests
+          git diff --check
+      - name: Commit only the reviewed code and tests to the same feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch=fix/funnel-doc-release-20261104
+          base=$(git rev-parse HEAD)
+          remote=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          test "$remote" = "$base"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add marina/funnel.py marina/funnel_bot.py marina/commerce.py marina/providers.py marina/operations.py tests/test_funnel.py tests/test_funnel_release_regressions.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: preserve payment confirmation and source-defined funnel transitions'
+          git push origin "HEAD:refs/heads/$branch"
