@@ -2,7 +2,7 @@ name: Prepare audited funnel fixes
 on:
   push:
     branches: ['fix/funnel-doc-release-20261104']
-    paths: ['scripts/prepare_funnel_release.py', '.github/workflows/funnel-audit-prepare.yml']
+    paths: ['scripts/prepare_funnel_release.py', 'tests/test_funnel_release_regressions.py', '.github/workflows/funnel-audit-prepare.yml']
 permissions:
   contents: write
 concurrency:
@@ -68,6 +68,9 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m 'fix: preserve payment confirmation and source-defined funnel transitions'
           git push origin "HEAD:refs/heads/$branch"
+      - name: Retain pure-Python test dependencies for offline reproduction
+        if: always()
+        run: pip download --only-binary=:all: --no-deps flask==3.1.2 werkzeug==3.1.9 click==8.5.0 itsdangerous==2.2.0 blinker==1.9.0 python-dotenv==1.1.1 --dest audit-wheels
       - name: Retain public source and regression evidence for review
         if: always()
         uses: actions/upload-artifact@v4
@@ -76,8 +79,10 @@ jobs:
           retention-days: 7
           path: |
             marina/*.py
+            marina/static/*
             tests/*.py
             scripts/*.py
+            audit-wheels/*.whl
             requirements*.txt
             requirements.lock
             pyproject.toml
