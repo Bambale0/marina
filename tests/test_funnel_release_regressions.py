@@ -167,6 +167,7 @@ def test_lava_nonterminal_success_is_rechecked_without_another_charge(app, verif
     order = owner.post(f"/api/funnel-runs/{run['id']}/purchase", json={}).json
     upstream = app.config["HTTP_TRANSPORT"]
     calls = []
+    verified = [False]
     paid_at = datetime.fromtimestamp(app.clock[0], timezone.utc).isoformat()
 
     def transport(method, url, data, headers):
@@ -175,7 +176,7 @@ def test_lava_nonterminal_success_is_rechecked_without_another_charge(app, verif
         calls.append(method)
         if method == "POST":
             return {"id": "fixture-contract", "paymentUrl": "https://example.test/pay"}
-        if calls.count("GET") == 1:
+        if not verified[0]:
             return {"id": "fixture-contract", "status": verification}
         return {"id": "fixture-contract", "status": "completed", "datetime": paid_at, "receipt": {"amount": 1.23, "currency": "RUB"}}
 
@@ -186,13 +187,19 @@ def test_lava_nonterminal_success_is_rechecked_without_another_charge(app, verif
     client = app.test_client()
     assert client.post("/api/webhooks/lava", headers={"X-Api-Key": "fixture-webhook"}, json=webhook).status_code == 200
     drain(app)
+    assert calls == ["POST", "GET", "GET"]
     assert not files
     with connect(app.config["DATABASE"]) as db:
         assert db.execute("SELECT count(*) FROM objects WHERE kind='payment_event' AND status='processed'").fetchone()[0] == 0
-    assert client.post("/api/webhooks/lava", headers={"X-Api-Key": "fixture-webhook"}, json=webhook).status_code == 200
+    # The provider becomes consistent later. No second callback is required to recover.
+    verified[0] = True
     app.clock[0] += 60
     drain(app)
-    assert calls == ["POST", "GET", "GET"]
+    assert calls == ["POST", "GET", "GET", "GET"]
+    assert len(files) == 1
+    assert client.post("/api/webhooks/lava", headers={"X-Api-Key": "fixture-webhook"}, json=webhook).status_code == 200
+    drain(app)
+    assert calls == ["POST", "GET", "GET", "GET"]
     assert len(files) == 1
     with connect(app.config["DATABASE"]) as db:
         assert db.execute("SELECT count(*) FROM receipts").fetchone()[0] == 1
