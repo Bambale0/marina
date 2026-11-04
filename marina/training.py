@@ -297,13 +297,15 @@ def register_training(app):
             )
             return obj
 
-        return idempotent(
+        result = idempotent(
             g.db,
             "lesson:" + g.actor["id"],
             d.get("key"),
             {"subject_id": s["id"], "day": day},
             start,
         )
+        lesson_access(result)
+        return result
 
     def lesson_access(obj):
         if active_access(g.db, g.actor["id"], obj["subject"], g.now):
