@@ -22,6 +22,15 @@ def show_question(bot):
     )
 
 
+def existing_booking(bot, id):
+    bot.state_set(step=None, consultation_intake=None)
+    bot.send(
+        "Анкета уже отправлена. Для изменения данных свяжитесь со специалистом через вашу запись.",
+        [("Открыть запись", "card", {"id": id, "kind": "booking"})],
+    )
+    return True
+
+
 def advance(bot, value):
     draft = bot.state["data"].get("consultation_intake")
     require(draft and len(draft["answers"]) < 3, "Откройте актуальную анкету записи")
@@ -31,6 +40,8 @@ def advance(bot, value):
     if len(answers) < 3:
         return show_question(bot)
     booking = bot.api("/funnel-runs/" + draft["run_id"] + "/book", "POST", {"answers": answers})
+    if booking["data"].get("intake_answers") != answers:
+        return existing_booking(bot, booking["id"])
     bot.state_set(step=None, consultation_intake=None)
     if booking["data"].get("payment_timing") == "before_scheduling":
         from .consultation_bot import offer_payment
@@ -58,6 +69,8 @@ def handle_action(bot, action, d):
         if not bot.privacy_gate("intake_start", d):
             return True
         details = bot.api("/funnel-runs/" + d["id"] + "/consultation-journey")
+        if details.get("booking_id"):
+            return existing_booking(bot, details["booking_id"])
         draft = {"id": uid(), "run_id": d["id"], "journey": details["journey"], "answers": {}}
         bot.state_set(step="consultation_intake", consultation_intake=draft)
         show_question(bot)

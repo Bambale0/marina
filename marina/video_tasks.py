@@ -73,10 +73,25 @@ def register_video_tasks(app):
         task = object_get(g.db, id, "video_task")
         require(task["revision"] == d.get("revision"), "Задание изменено, обновите карточку", 409)
         text = d.get("text", "")
-        require(
-            isinstance(text, str) and 0 < len(text.strip()) <= 16000, "Напишите текст специалиста"
-        )
-        if action == "assignment":
+        if action in ("assignment", "recommendations"):
+            require(
+                isinstance(text, str) and 0 < len(text.strip()) <= 16000,
+                "Напишите текст специалиста",
+            )
+        if action == "close":
+            require(
+                task["status"] in ("requested", "awaiting_videos", "submitted"),
+                "Разбор уже завершён",
+                409,
+            )
+            payload = {
+                **task["data"],
+                "closed_at": g.now,
+                "closed_by": g.actor["id"],
+                "due_at": None,
+            }
+            state = "closed"
+        elif action == "assignment":
             require(task["status"] == "requested", "Задание уже выдано", 409)
             payload = {
                 **task["data"],

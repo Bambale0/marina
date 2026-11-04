@@ -1445,6 +1445,10 @@ class Bot:
             self.send(
                 "Укажите email для электронного чека Lava.top. Он используется только для оформления платежа."
             )
+        elif action == "booking_preparation":
+            pdf = self.client.get("/api/bookings/" + d["id"] + "/preparation")
+            require(pdf.status_code == 200, (pdf.json or {}).get("error", "Памятка недоступна"))
+            send_file(self.app, self.chat, "preparation.pdf", pdf.data, "application/pdf")
         elif action == "card":
             self.card(d["id"], d["kind"])
         elif action == "case_submit":
@@ -1999,6 +2003,15 @@ class Bot:
             if d.get("connection"):
                 text += "\nСсылка встречи: " + d["connection"]
             self.send(text, buttons)
+            if (
+                d.get("paid_at") is not None
+                and d.get("payment_timing") == "before_scheduling"
+                and obj["status"] != "cancelled"
+            ):
+                self.send(
+                    "Памятка подготовки доступна в вашей записи.",
+                    [("Скачать памятку подготовки", "booking_preparation", {"id": id})],
+                )
             if obj["status"] == "confirmed":
                 from .consultation_bot import offer_payment
 
@@ -2085,6 +2098,14 @@ class Bot:
                             {"id": id, "command": "video-tasks/recommendations"},
                         )
                     )
+            if o["status"] in ("requested", "awaiting_videos", "submitted"):
+                buttons.append(
+                    (
+                        "Закрыть видеоразбор",
+                        "admin_command",
+                        {"id": id, "route": "video-tasks", "command": "close"},
+                    )
+                )
         elif o["kind"] == "video_review":
             buttons = [
                 (

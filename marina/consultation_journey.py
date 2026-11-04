@@ -75,6 +75,10 @@ def validate_journey(db, d):
             ids.append(o["id"])
         require(len(ids) == len(set(ids)), "Варианты должны иметь разные ID")
         require(type(q.get("allow_custom", False)) is bool, "Проверьте свободный ответ")
+        require(
+            q.get("allow_custom", False) == ("other" in ids),
+            "Свободный ответ должен соответствовать варианту «Другое»",
+        )
     if d["payment_timing"] == "before_scheduling":
         require(
             material_ready(db, d.get("preparation_material_id")),
@@ -148,6 +152,13 @@ def validate_routes(db, d):
         )
         require(type(r.get("amount_rub")) is int and r["amount_rub"] > 0, "Укажите цену категории")
         if r.get("material_id"):
+            require(
+                all(
+                    isinstance(r.get(k), str) and bool(r[k].strip())
+                    for k in ("gift_text", "material_filename")
+                ),
+                "Добавьте текст выдачи и имя PDF категории",
+            )
             require(material_ready(db, r["material_id"]), "Опубликуйте PDF категории")
     baby = rs["baby_0_2"]
     require(
@@ -201,6 +212,7 @@ def register_consultation_journey(app):
             j = booking["data"].get("journey_snapshot") or j
         return {
             "journey": j,
+            "booking_id": run["data"].get("booking_id"),
             "eligible": eligible,
             "amount_rub": s["consultation_amount_rub"]
             if eligible
@@ -209,6 +221,33 @@ def register_consultation_journey(app):
             "code": s["consultation_code"],
             "contact_url": s.get("contact_url", ""),
         }
+
+    @app.get("/api/bookings/<id>/preparation")
+    @protected()
+    def preparation(id):
+        booking = object_get(g.db, id, "booking", g.actor["id"])
+        require(
+            booking["data"].get("paid_at") is not None
+            and booking["status"] != "cancelled"
+            and booking["data"].get("payment_timing") == "before_scheduling",
+            "Памятка пока недоступна",
+            404,
+        )
+        j = booking["data"].get("journey_snapshot", {})
+        blob = g.db.execute(
+            "SELECT body FROM blobs WHERE id=? AND case_id=? AND mime='application/pdf'",
+            (j.get("preparation_asset_id"), j.get("preparation_material_id")),
+        ).fetchone()
+        require(blob, "Материал недоступен", 404)
+        audit(
+            g.db,
+            g.actor["id"],
+            "booking.preparation-view",
+            booking,
+            g.now,
+            "Получение памятки подготовки",
+        )
+        return Response(blob["body"], mimetype="application/pdf")
 
     @app.get("/api/consultation-routes")
     @protected()
@@ -231,6 +270,10 @@ def register_consultation_journey(app):
         )
         require(d.get("action") in ("contact", "booking", "download"), "Выберите действие")
         r = p["data"]["routes"][d["route"]]
+        if d["route"] == "baby_0_2" and d["action"] == "booking":
+            from .scope import require_service
+
+            require_service(g.db, "video_task")
         if d["action"] == "download":
             require(material_ready(g.db, r.get("material_id")), "Материал ещё не опубликован", 404)
         payload = {

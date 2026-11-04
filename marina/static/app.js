@@ -1054,6 +1054,7 @@ async function clientCard(o) {
         await api("/video-tasks/"+o.id+"/submit","POST",{});await history();
       }));
     }
+    if(o.status==="closed") card.append(el("p",{},"Видеоразбор закрыт. Для продолжения свяжитесь со специалистом."));
     if(o.status==="submitted") card.append(el("p",{},"Видео у специалиста. Коррекция и рекомендации придут в этот раздел и в Telegram."));
     for(const aid of d.answer_attachments || []) card.append(button("Открыть материал рекомендаций",async()=>{
       const url=await authenticatedFile("/media/"+aid);
@@ -1063,6 +1064,12 @@ async function clientCard(o) {
   if(o.kind==="consultation_lead") card.append(el("p",{},d.label),el("p",{},"Запрос передан специалисту."));
   if (o.kind === "booking") {
     card.append(el("p", {}, d.topic));
+    if(d.paid_at != null && d.payment_timing==="before_scheduling" && o.status!=="cancelled")
+      card.append(button("Скачать памятку подготовки",async()=>{
+        const url=await authenticatedFile("/bookings/"+o.id+"/preparation");
+        el("a",{href:url,download:"preparation.pdf"}).click();
+        setTimeout(()=>URL.revokeObjectURL(url),60000);
+      },true));
     const p = d.proposals?.find((p) => p.id === d.current_proposal);
     if (p)
       card.append(

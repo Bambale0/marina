@@ -23,9 +23,16 @@ def notify_specialist_event(app, owner, id, event):
         obj = object_get(db, id, owner=owner)
         account = db.execute("SELECT * FROM accounts WHERE id=?", (owner,)).fetchone()
         require(account, "Получатель не найден")
-    if account["blocked"]:
-        return
-    if event in ("video_task.assignment", "video_task.recommendations"):
+    if event in ("video_task.assignment", "video_task.recommendations", "video_task.close"):
+        if account["blocked"]:
+            return
+        expected = {
+            "video_task.assignment": "awaiting_videos",
+            "video_task.recommendations": "completed",
+            "video_task.close": "closed",
+        }
+        if obj["status"] != expected[event]:
+            return
         bot = Bot(
             app,
             {"id": account["telegram_id"], "first_name": account["name"]},
@@ -42,6 +49,8 @@ def notify_specialist_event(app, owner, id, event):
                 + str(obj["data"]["rules"]["max_video_seconds"])
                 + " секунд. Условия оплаты согласуются со специалистом лично."
             )
+        elif event == "video_task.close":
+            text = "Видеоразбор закрыт специалистом. Если хотите продолжить, свяжитесь со специалистом лично."
         else:
             text = (
                 "✅ Разбор выполнения и рекомендации специалиста\n\n"

@@ -92,5 +92,5 @@ def register_attachments(app):
             "ready",
             id=blob_id,
         )
-        audit(g.db, g.actor["id"], "case.response-upload", media, g.now, why)
+        audit(g.db, g.actor["id"], parent_kind + ".response-upload", media, g.now, why)
         return media, 201

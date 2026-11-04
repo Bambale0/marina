@@ -268,6 +268,7 @@ def test_video_assignment_upload_review_and_recommendations(app, tmp_path):
         },
     )
     assert assigned.status_code == 200, assigned.json
+    drain(app)  # Deliver the current assignment before the parent acts on it.
     for slot in range(1, 4):
         r = owner.post(
             "/api/video-tasks/" + task["id"] + "/video",
@@ -314,7 +315,7 @@ def test_video_assignment_upload_review_and_recommendations(app, tmp_path):
     app.config["FILE_TRANSPORT"] = lambda *args: files.append(args)
     drain(app)
     assert len(files) == 3
-    assert any("Авторское задание" in d.get("text", "") and d["chat_id"] == 2 for d in calls)
+    assert not any("Задание специалиста" in d.get("text", "") and d["chat_id"] == 2 for d in calls)
     assert any(
         "индивидуальные рекомендации" in d.get("text", "") and d["chat_id"] == 2 for d in calls
     )

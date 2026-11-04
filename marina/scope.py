@@ -21,6 +21,12 @@ def require_service(db, service):
 
 
 def action_service(action, data):
+    if (
+        action == "outside_interest"
+        and data.get("route") == "baby_0_2"
+        and data.get("action") == "booking"
+    ):
+        return "video_task"
     if action == "training":
         return "subscription"
     if action in ("case_prepare", "case_submit"):

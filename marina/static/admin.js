@@ -1000,6 +1000,8 @@ async function adminCard(id) {
       actions.append(button("Заявка на диагностику", () => adminCard(o.data.booking_id), true));
   }
   if(o.kind==="video_task") {
+    if(["requested","awaiting_videos","submitted"].includes(o.status))
+      actions.append(button("Закрыть видеоразбор",()=>command("/admin/video-tasks/"+id+"/close"),true));
     if(o.status==="requested") actions.append(button("Выдать задание родителю",()=>command("/admin/video-tasks/"+id+"/assignment")));
     if(o.status==="submitted") {
       const responseIds=[],responseFile=field("Аудиоразбор или материал рекомендаций (MP3, OGG, MP4, PDF)","file");

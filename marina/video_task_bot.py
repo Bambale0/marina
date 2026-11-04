@@ -16,6 +16,8 @@ def show_task(bot, id):
         or d.get("assignment")
         or "Специалист подготовит задание. Оно придёт в этот чат. Не нужно заранее снимать случайные видео."
     )
+    if task["status"] == "closed":
+        text += "\n\nВидеоразбор закрыт. Для продолжения свяжитесь со специалистом."
     if task["status"] == "awaiting_videos":
         filled = {v["slot"] for v in d["videos"]}
         buttons = [
