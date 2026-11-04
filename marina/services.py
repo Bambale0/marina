@@ -25,6 +25,73 @@ def text_input(d, key="text"):
     return text.strip()
 
 
+def cancel_booking_payments(db, booking, now, actor, why):
+    """Stop unstarted invoices and preserve paid cancellation for manual review."""
+    for row in db.execute(
+        "SELECT a.* FROM objects a JOIN objects o "
+        "ON o.id=json_extract(a.data,'$.order_id') "
+        "WHERE a.kind='payment_attempt' AND a.status='queued' "
+        "AND json_extract(o.data,'$.booking_id')=? AND o.owner=? "
+        "AND EXISTS(SELECT 1 FROM outbox e WHERE e.object_id=a.id "
+        "AND e.event='invoice.create' AND e.status='pending')",
+        (booking["id"], booking["owner"]),
+    ).fetchall():
+        from .db import unpack
+
+        attempt = unpack(row)
+        update(db, attempt, now, status="cancelled")
+        db.execute(
+            "UPDATE outbox SET status='cancelled',leased_until=NULL "
+            "WHERE object_id=? AND event='invoice.create' AND status='pending'",
+            (attempt["id"],),
+        )
+    order_id = booking["data"].get("order_id")
+    if booking["data"].get("paid_at") is None or not order_id:
+        return
+    order = object_get(db, order_id, "order", booking["owner"])
+    if (
+        not order["data"].get("consultation_run_id")
+        or order["data"].get("access_source") == "admin"
+    ):
+        return
+    receipt = db.execute(
+        "SELECT * FROM receipts WHERE order_id=? AND status='confirmed'", (order_id,)
+    ).fetchone()
+    if not receipt:
+        return
+
+    def create_review():
+        review = insert(
+            db,
+            "reconciliation",
+            {
+                "issue": "paid_consultation_cancelled",
+                "booking_id": booking["id"],
+                "order_id": order_id,
+                "provider": receipt["provider"],
+                "charge": receipt["charge"],
+                "amount": receipt["amount"],
+                "currency": receipt["currency"],
+                "assigned_to": None,
+            },
+            now,
+            booking["owner"],
+            status="open",
+        )
+        audit(db, actor, "consultation.cancellation-review", review, now, why)
+        db.execute(
+            "UPDATE outbox SET status='cancelled',leased_until=NULL "
+            "WHERE object_id=? AND event='consultation.paid' AND status='pending'",
+            (booking["id"],),
+        )
+        emit(db, booking["owner"], booking["id"], "consultation.cancelled", now)
+        return review
+
+    idempotent(
+        db, "consultation-cancellation", order_id, {"booking_id": booking["id"]}, create_review
+    )
+
+
 def render_pdf(text, limitations=""):
     # Bundle a Cyrillic font and its license; rendering does not depend on the host.
     from pathlib import Path
@@ -442,6 +509,16 @@ def register_services(app):
         why = reason(d)
         require(d.get("revision") == obj["revision"], "Заявка изменена", 409)
         payload = {**obj["data"]}
+        if action in ("connection", "complete") and payload.get("run_id"):
+            run = object_get(g.db, payload["run_id"], "funnel_run", obj["owner"])
+            # Legacy appointments remain available until their age tariff is connected.
+            from .funnel import published
+
+            current = published(g.db, run["data"]["child_age"])
+            if run["data"]["snapshot"].get("consultation_product_id") or (
+                current and current["data"].get("consultation_product_id")
+            ):
+                require(payload.get("paid_at") is not None, "Сначала оплатите консультацию")
         if action == "propose":
             require(obj["status"] not in ("cancelled", "completed"), "Заявка закрыта", 409)
             require(
@@ -500,6 +577,8 @@ def register_services(app):
             obj["revision"],
         )
         emit(g.db, obj["owner"], id, "booking." + action, g.now)
+        if action == "cancel":
+            cancel_booking_payments(g.db, result, g.now, g.actor["id"], why)
         from .crm import sync_booking
 
         sync_booking(g.db, result, g.now, g.actor["id"], why)
@@ -550,6 +629,10 @@ def register_services(app):
             obj["revision"],
         )
         emit(g.db, obj["owner"], id, "booking." + action, g.now)
+        if action == "cancel":
+            cancel_booking_payments(
+                g.db, result, g.now, g.actor["id"], "Решение клиента об отмене встречи"
+            )
         from .crm import sync_booking
 
         sync_booking(g.db, result, g.now, g.actor["id"], "Решение клиента о времени")

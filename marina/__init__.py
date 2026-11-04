@@ -515,6 +515,9 @@ def create_app(config=None):
     from .commerce import register_commerce
 
     register_commerce(app)
+    from .consultation_commerce import register_consultation_commerce
+
+    register_consultation_commerce(app)
     from .services import register_services
 
     register_services(app)

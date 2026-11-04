@@ -126,6 +126,12 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
         existing_case = object_get(db, d["case_id"], "case", order["owner"])
         if existing_case["data"]["paid_at"] is not None:
             issue = "duplicate_payment"
+    if not issue and d.get("booking_id"):
+        booking = object_get(db, d["booking_id"], "booking", order["owner"])
+        if booking["data"].get("paid_at") is not None:
+            issue = "duplicate_payment"
+        elif booking["status"] != "confirmed":
+            issue = "booking_not_confirmed"
     db.execute(
         "INSERT INTO receipts VALUES(?,?,?,?,?,?,?,?)",
         (
@@ -141,7 +147,10 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
     )
     if issue:
         reconcile(db, order, now, issue, charge)
-        if issue in ("duplicate_payment", "late_payment") and order["status"] != "paid":
+        if (
+            issue in ("duplicate_payment", "late_payment", "booking_not_confirmed")
+            and order["status"] != "paid"
+        ):
             return update(db, order, now, status="paid_review")
         return order
     result = fulfill(db, order, paid_at, now)
@@ -166,6 +175,8 @@ def checkout_open(db, order, now):
     """New invoice eligibility only; received money still goes through confirm."""
     if order["status"] != "pending" or order["data"]["expires"] <= now:
         return False
+    if order["data"].get("booking_id"):
+        return booking_open_for_payment(db, order["data"]["booking_id"], order["owner"])
     run_id = order["data"].get("run_id")
     if not run_id:
         return True
@@ -175,6 +186,11 @@ def checkout_open(db, order, now):
         and not run["data"].get("refused_at")
         and run["data"].get("offer_expires", 0) > now
     )
+
+
+def booking_open_for_payment(db, booking_id, owner):
+    booking = object_get(db, booking_id, "booking", owner)
+    return booking["status"] == "confirmed" and booking["data"].get("paid_at") is None
 
 
 def fulfill(db, order, paid_at, now):
@@ -269,6 +285,8 @@ def fulfill(db, order, paid_at, now):
                 now,
                 {**obj["data"], "order_id": order["id"], "paid_at": paid_at},
             )
+            if d.get("consultation_run_id") and d.get("access_source") != "admin":
+                emit(db, order["owner"], obj["id"], "consultation.paid", now)
         db.execute(
             "INSERT INTO intent_fulfillments VALUES(?,?,?,?)",
             (
@@ -582,8 +600,10 @@ def register_commerce(app):
         if service == "booking":
             booking = object_get(g.db, d.get("booking_id"), "booking", g.actor["id"])
             require(
-                booking["status"] == "confirmed" and booking["subject"] == subjects[0]["id"],
-                "Сначала подтвердите встречу",
+                booking["status"] == "confirmed"
+                and booking["data"].get("paid_at") is None
+                and booking["subject"] == subjects[0]["id"],
+                "Сначала подтвердите неоплаченную встречу",
             )
             extra["booking_id"] = booking["id"]
         if service == "course":
@@ -673,6 +693,11 @@ def register_commerce(app):
                 "Этот способ оплаты отключён",
             )
             require(q["data"]["expires"] > g.now, "Расчёт истёк, обновите цену")
+            if q["data"].get("booking_id"):
+                require(
+                    booking_open_for_payment(g.db, q["data"]["booking_id"], g.actor["id"]),
+                    "Встреча закрыта, не подтверждена или уже оплачена",
+                )
             require(
                 not g.db.execute(
                     "SELECT 1 FROM objects WHERE kind='order' AND json_extract(data,'$.quote_id')=?",

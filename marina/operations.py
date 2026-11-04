@@ -33,6 +33,112 @@ def verify_backup(path):
         }
 
 
+def notify_consultation(app, owner, object_id, event):
+    """Checkpoint each acknowledged recipient; cancellation wins over a delayed receipt."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from .funnel import price_text
+    from .providers import telegram
+
+    path = app.config["DATABASE"]
+    with connect(path) as db:
+        booking = object_get(db, object_id, "booking", owner)
+        order = object_get(db, booking["data"].get("order_id"), "order", owner)
+        account = db.execute("SELECT telegram_id FROM accounts WHERE id=?", (owner,)).fetchone()
+    if (
+        booking["data"].get("paid_at") is None
+        or order["status"] != "paid"
+        or order["data"].get("access_source") == "admin"
+    ):
+        return
+    cancelled = booking["status"] == "cancelled"
+    if event == "consultation.cancelled" and not cancelled:
+        return
+    notice = "cancelled" if cancelled else "paid"
+    amount = price_text(
+        {"data": {"amount": order["data"]["total"], "currency": order["data"]["currency"]}}
+    )
+    if cancelled:
+        client_text = (
+            "Запись на консультацию отменена. Оплата "
+            + amount
+            + " сохранена. Марина проверит условия возврата и свяжется с вами."
+        )
+        admin_text = (
+            "Отменена оплаченная консультация: "
+            + amount
+            + ". Требуется разбор возврата. Заявка "
+            + booking["id"]
+            + "."
+        )
+    else:
+        client_text = "✅ Консультация оплачена: " + amount + "."
+        if booking["status"] == "confirmed":
+            proposal = next(
+                (
+                    p
+                    for p in booking["data"]["proposals"]
+                    if p["id"] == booking["data"]["current_proposal"]
+                ),
+                None,
+            )
+            if proposal:
+                zone = proposal["timezone"]
+                client_text += (
+                    "\nВремя: "
+                    + datetime.fromtimestamp(proposal["starts"], ZoneInfo(zone)).strftime(
+                        "%d.%m.%Y %H:%M"
+                    )
+                    + " ("
+                    + zone
+                    + ")."
+                )
+            client_text += (
+                "\nСсылка на встречу: " + booking["data"]["connection"]
+                if booking["data"].get("connection")
+                else "\nМарина пришлёт ссылку на встречу в этот чат."
+            )
+        elif booking["status"] != "completed":
+            client_text += "\nНовое время встречи согласуется с Мариной."
+        admin_text = "Оплачена консультация: " + amount + ". Заявка " + booking["id"] + "."
+    require(account, "Получатель не найден")
+    recipients = [("client", account["telegram_id"], client_text)]
+    require(app.config["ADMIN_TELEGRAM_IDS"], "Укажите специалиста для уведомлений")
+    recipients += [("admin", chat, admin_text) for chat in sorted(app.config["ADMIN_TELEGRAM_IDS"])]
+    for role, chat, text in recipients:
+        marker = f"consultation-notice:{booking['id']}:{notice}:{role}:{chat}"
+        with transaction(path) as db:
+            if db.execute("SELECT 1 FROM runtime WHERE key=?", (marker,)).fetchone():
+                continue
+            payload = {"chat_id": chat, "text": text}
+            if role == "admin":
+                specialist = db.execute(
+                    "SELECT id FROM accounts WHERE telegram_id=?", (chat,)
+                ).fetchone()
+                if specialist:
+                    callback = insert(
+                        db,
+                        "bot_callback",
+                        {"action": "admin_card", "id": booking["id"]},
+                        int(app.config["CLOCK"]()),
+                        specialist["id"],
+                        status="active",
+                    )
+                    payload["reply_markup"] = {
+                        "inline_keyboard": [
+                            [{"text": "Открыть заявку", "callback_data": "b:" + callback["id"]}]
+                        ]
+                    }
+                else:
+                    payload["text"] += " Найдите заявку в разделе «Все сущности → Встречи»."
+        telegram(app, "sendMessage", payload)
+        with transaction(path) as db:
+            db.execute(
+                "INSERT OR IGNORE INTO runtime VALUES(?,?)",
+                (marker, str(int(app.config["CLOCK"]()))),
+            )
+
+
 def notify(app, owner, object_id, event):
     from .providers import telegram
 
@@ -52,6 +158,8 @@ def notify(app, owner, object_id, event):
 
     with connect(app.config["DATABASE"]) as db:
         account = db.execute("SELECT telegram_id FROM accounts WHERE id=?", (owner,)).fetchone()
+    if event in ("consultation.paid", "consultation.cancelled"):
+        return notify_consultation(app, owner, object_id, event)
     if event == "invoice.ready":
         from .commerce import checkout_open, provider_enabled
 

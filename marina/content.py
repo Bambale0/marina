@@ -457,7 +457,7 @@ def validate(obj):
             d.get("type") in ("commerce", "operations", "privacy", "training", "ai"),
             "Укажите тип правил",
         )
-        guide_commerce = d.get("type") == "commerce" and d.get("scope") == "guide"
+        guide_commerce = d.get("type") == "commerce" and d.get("scope") in ("guide", "consultation")
         require(d.get("terms") or guide_commerce, "Укажите условия и основание решения")
         if d["type"] == "commerce":
             if guide_commerce:
