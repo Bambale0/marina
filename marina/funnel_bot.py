@@ -1,5 +1,7 @@
 """Telegram presentation for the public screening funnel API."""
 
+import re
+
 from . import require
 from .db import connect
 from .funnel import AGES, published, render_copy
@@ -17,9 +19,12 @@ def show_question(bot, run):
         return
     require(run["status"] == "in_progress", "Этот тест закрыт. Начните заново: /start")
     q = run["data"]["question"]
+    text = re.sub(
+        r"^\s*\[Вопрос\s+\d+\s+из\s+\d+\]\s*", "", q["text"], count=1, flags=re.IGNORECASE
+    )
     letters = "АБВ"
     bot.send(
-        q["text"]
+        text
         + "\n\n"
         + "\n\n".join(f"{letters[i]}. {o['text']}" for i, o in enumerate(q["options"])),
         [
