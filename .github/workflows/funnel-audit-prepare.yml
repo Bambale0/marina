@@ -70,7 +70,8 @@ jobs:
           git push origin "HEAD:refs/heads/$branch"
       - name: Retain pure-Python test dependencies for offline reproduction
         if: always()
-        run: pip download --only-binary=:all: --no-deps flask==3.1.2 werkzeug==3.1.9 click==8.5.0 itsdangerous==2.2.0 blinker==1.9.0 python-dotenv==1.1.1 --dest audit-wheels
+        run: |
+          pip download --only-binary=:all: --no-deps flask==3.1.2 werkzeug==3.1.9 click==8.5.0 itsdangerous==2.2.0 blinker==1.9.0 python-dotenv==1.1.1 --dest audit-wheels
       - name: Retain public source and regression evidence for review
         if: always()
         uses: actions/upload-artifact@v4
