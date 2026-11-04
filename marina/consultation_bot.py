@@ -38,6 +38,20 @@ def show_quote(bot, booking, quote, refreshed=False):
         )
     if admin:
         text += "\nДля администратора доступ без оплаты."
+    if booking["data"].get("payment_timing") == "before_scheduling":
+        journey = booking["data"]["journey_snapshot"]
+        text = (
+            "🎯 Анкета принята! Ваши данные сохранены.\n\n"
+            + (
+                "Промокод " + str(promotion.get("code", "")) + " активирован.\n"
+                if promotion.get("eligible") is True
+                else ""
+            )
+            + "💳 К оплате: "
+            + price
+            + "\n\n"
+            + journey["checkout_body"]
+        )
     bot.send(
         text,
         [
@@ -47,7 +61,8 @@ def show_quote(bot, booking, quote, refreshed=False):
                 else "💳 Оплатить консультацию за " + price,
                 "consultation_buy",
                 {"id": booking["id"], "quote_id": quote["id"]},
-            )
+            ),
+            ("❌ Назад к описанию", "funnel_consultation", {"id": booking["data"]["run_id"]}),
         ],
     )
 
@@ -107,6 +122,15 @@ def handle_action(bot, action, values):
 
 
 def completed_text(order):
+    if (
+        order["data"].get("booking_snapshot", {}).get("data", {}).get("payment_timing")
+        == "before_scheduling"
+    ):
+        return (
+            "Доступ к консультации открыт без оплаты. Согласуйте дату и время со специалистом."
+            if order["data"].get("access_source") == "admin"
+            else "Консультация оплачена. Специалист свяжется с вами для согласования даты и времени."
+        )
     return (
         "Консультация доступна без оплаты. Время встречи сохранено в вашей записи."
         if order["data"].get("access_source") == "admin"

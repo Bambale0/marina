@@ -81,6 +81,7 @@ def protected(admin=False):
                     "/api/cases": "case",
                     "/api/plans": "subscription",
                     "/api/lessons/start": "subscription",
+                    "/api/video-tasks": "video_task",
                 }.get(request.path)
                 if request.method == "POST" and new_service:
                     from .scope import require_service
@@ -99,6 +100,8 @@ def protected(admin=False):
                         for prefix in (
                             "subjects",
                             "video-reviews",
+                            "video-tasks",
+                            "consultation-leads",
                             "attempts",
                             "bookings",
                             "quotes",
@@ -530,6 +533,11 @@ def create_app(config=None):
     from .consultation_commerce import register_consultation_commerce
 
     register_consultation_commerce(app)
+    from .consultation_journey import register_consultation_journey
+    from .video_tasks import register_video_tasks
+
+    register_consultation_journey(app)
+    register_video_tasks(app)
     from .services import register_services
 
     register_services(app)

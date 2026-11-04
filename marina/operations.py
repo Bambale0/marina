@@ -44,7 +44,9 @@ def notify_consultation(app, owner, object_id, event):
     with connect(path) as db:
         booking = object_get(db, object_id, "booking", owner)
         order = object_get(db, booking["data"].get("order_id"), "order", owner)
-        account = db.execute("SELECT telegram_id FROM accounts WHERE id=?", (owner,)).fetchone()
+        account = db.execute(
+            "SELECT telegram_id,name FROM accounts WHERE id=?", (owner,)
+        ).fetchone()
     if (
         booking["data"].get("paid_at") is None
         or order["status"] != "paid"
@@ -101,6 +103,28 @@ def notify_consultation(app, owner, object_id, event):
         elif booking["status"] != "completed":
             client_text += "\nНовое время встречи согласуется с Мариной."
         admin_text = "Оплачена консультация: " + amount + ". Заявка " + booking["id"] + "."
+        journey = booking["data"].get("journey_snapshot", {})
+        if booking["data"].get("payment_timing") == "before_scheduling":
+            client_text = journey["success_before_file"].replace("{price}", amount)
+        intake = booking["data"].get("intake_display")
+        if intake:
+            promo = booking["data"].get("promotion", {})
+            admin_text += (
+                "\nКлиент: "
+                + account["name"]
+                + "\nПрофиль: "
+                + intake["profile"]
+                + "\nЗапрос: "
+                + intake["problem"]
+                + "\nУдобное время: "
+                + intake["slot"]
+            )
+            admin_text += (
+                "\nПромокод: " + str(promo.get("code", ""))
+                if promo.get("eligible") is True
+                else "\nПолная цена, купон не применяется."
+            )
+            admin_text += "\nНаписать родителю: tg://user?id=" + str(account["telegram_id"])
     require(account, "Получатель не найден")
     recipients = [("client", account["telegram_id"], client_text)]
     require(app.config["ADMIN_TELEGRAM_IDS"], "Укажите специалиста для уведомлений")
@@ -138,10 +162,47 @@ def notify_consultation(app, owner, object_id, event):
                 (marker, str(int(app.config["CLOCK"]()))),
             )
 
+    journey = booking["data"].get("journey_snapshot", {})
+    if not cancelled and booking["data"].get("payment_timing") == "before_scheduling":
+        from .bot import send_file
+        from .consultation_delivery import send_once
+
+        with connect(path) as db:
+            blob = db.execute(
+                "SELECT body,mime FROM blobs WHERE id=? AND case_id=?",
+                (journey.get("preparation_asset_id"), journey.get("preparation_material_id")),
+            ).fetchone()
+        require(blob, "Оплаченная памятка недоступна; выдача сохранена для повтора")
+        marker = "consultation-preparation:" + booking["id"]
+        send_once(
+            app,
+            marker,
+            lambda: send_file(
+                app,
+                account["telegram_id"],
+                journey["preparation_filename"],
+                blob["body"],
+                blob["mime"],
+            ),
+        )
+        send_once(
+            app,
+            marker + ":footer",
+            lambda: telegram(
+                app,
+                "sendMessage",
+                {"chat_id": account["telegram_id"], "text": journey["success_after_file"]},
+            ),
+        )
+
 
 def notify(app, owner, object_id, event):
     from .providers import telegram
 
+    if event == "consultation.lead" or event.startswith("video_task."):
+        from .consultation_delivery import notify_specialist_event
+
+        return notify_specialist_event(app, owner, object_id, event)
     if event.startswith("funnel."):
         from .funnel import notify_funnel
 
@@ -157,7 +218,9 @@ def notify(app, owner, object_id, event):
         return notify_review_video(app, owner, object_id)
 
     with connect(app.config["DATABASE"]) as db:
-        account = db.execute("SELECT telegram_id FROM accounts WHERE id=?", (owner,)).fetchone()
+        account = db.execute(
+            "SELECT telegram_id,name FROM accounts WHERE id=?", (owner,)
+        ).fetchone()
     if event in ("consultation.paid", "consultation.cancelled"):
         return notify_consultation(app, owner, object_id, event)
     if event == "invoice.ready":
@@ -493,7 +556,7 @@ def tick(app):
         settings = policies(db, "operations")
         d = settings["data"] if settings else {}
         for row in db.execute(
-            "SELECT * FROM objects WHERE kind IN ('report','case') AND status NOT IN ('published','closed')"
+            "SELECT * FROM objects WHERE kind IN ('report','case','video_task') AND status NOT IN ('published','closed','completed')"
         ).fetchall():
             obj = unpack(row)
             due = (
@@ -575,7 +638,7 @@ def register_operations(app):
     def queue():
         start = offset()
         where = (
-            "kind IN ('video_review','report','case','booking','reconciliation',"
+            "kind IN ('video_review','video_task','consultation_lead','report','case','booking','reconciliation',"
             "'data_request','ai_job','refund','payment_event','retention_task') "
             "AND status NOT IN ('published','closed','completed','cancelled',"
             "'resolved','processed','confirmed')"

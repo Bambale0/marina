@@ -95,6 +95,32 @@ const labels = {
   question: "ID предыдущего вопроса",
   answer: "ID варианта, при котором показывается вопрос",
   type: "Тип правил",
+  consultation_journey: "Описание, анкета и оплата диагностики",
+  payment_timing: "Оплата: before_scheduling / after_scheduling",
+  requested_payment_timing: "Порядок оплаты из авторского документа",
+  preparation_material_id: "Опубликованная PDF-памятка подготовки",
+  preparation_filename: "Название файла памятки",
+  checkout_body: "Пояснение после анкеты",
+  success_before_file: "Сообщение после оплаты перед файлом",
+  success_after_file: "Сообщение после файла",
+  contact_text: "Ответ при вопросе специалисту",
+  contact_prefill: "Готовый текст личного сообщения",
+  menu_text: "Меню другого возраста",
+  specialist_name: "Имя специалиста",
+  routes: "Категории обращений",
+  baby_0_2: "Малыши до 3 лет",
+  teen_senior: "Подростки 15–18 лет",
+  adult: "Взрослые",
+  required_videos: "Количество видео выполнения",
+  max_video_seconds: "Максимальная длина видео, секунд",
+  response_hours: "Срок ручного разбора, часов",
+  material_filename: "Название PDF для выдачи",
+  gift_text: "Сообщение с бесплатным материалом",
+  amount_rub: "Цена услуги, ₽",
+  lead_type: "Категория обращения",
+  intake_display: "Ответы анкеты",
+  assignment: "Задание специалиста",
+  recommendations: "Коррекция и рекомендации специалиста",
   scope: "Область правил",
   offer_template_id: "ID опубликованной оферты",
   family_at: "Дата расчёта семьи (quote)",
@@ -242,6 +268,7 @@ const policyTemplates = {
     late_payment: "review",
     refund_policy_approved: false,
   },
+  consultation_routes: { type: 'consultation_routes', terms: '' },
   operations: {
     type: "operations",
     terms: "",
@@ -669,7 +696,8 @@ async function editContent(obj, kind) {
     modal(
       form("Выберите тип правил", [type], "Продолжить", async () => {
         $("#dialog").close();
-        await contentForm(null, kind, clone(policyTemplates[type.get()]));
+        const defaults = type.get()==='consultation_routes' ? await api('/admin/consultation-route-defaults') : clone(policyTemplates[type.get()]);
+        await contentForm(null, kind, defaults);
       }),
     );
     return;
@@ -971,6 +999,25 @@ async function adminCard(id) {
     if (o.data.booking_id)
       actions.append(button("Заявка на диагностику", () => adminCard(o.data.booking_id), true));
   }
+  if(o.kind==="video_task") {
+    if(o.status==="requested") actions.append(button("Выдать задание родителю",()=>command("/admin/video-tasks/"+id+"/assignment")));
+    if(o.status==="submitted") {
+      const responseIds=[],responseFile=field("Аудиоразбор или материал рекомендаций (MP3, OGG, MP4, PDF)","file");
+      actions.append(responseFile.node,button("Прикрепить материал рекомендаций",async()=>{
+        if(!responseFile.input.files[0]) throw new Error("Выберите файл");
+        const data=new FormData();data.append("file",responseFile.input.files[0]);data.append("reason",why.get());
+        const uploaded=await api("/admin/video-tasks/"+id+"/media","POST",data);
+        responseIds.push(uploaded.id);notice("Материал сохранён. Теперь опубликуйте рекомендации.");
+      },true));
+      actions.append(button("Отправить коррекцию и рекомендации",()=>command("/admin/video-tasks/"+id+"/recommendations",{attachments:responseIds})));
+    }
+    for(const item of o.data.videos || []) actions.append(button("Открыть видео: пункт "+item.slot,async()=>{
+      const src=await authenticatedFile("/video-tasks/"+id+"/video/"+item.slot);
+      window.open(src,"_blank","noopener");
+      setTimeout(()=>URL.revokeObjectURL(src),60000);
+    },true));
+  }
+  if(o.kind==="consultation_lead" && o.status!=="closed") actions.append(button("Закрыть обращение",()=>command("/admin/consultation-leads/"+id+"/close"),true));
   if (o.kind === "report") {
     const n = o.data.revisions?.length || 0;
     actions.append(

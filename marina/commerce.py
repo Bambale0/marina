@@ -130,7 +130,7 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
         booking = object_get(db, d["booking_id"], "booking", order["owner"])
         if booking["data"].get("paid_at") is not None:
             issue = "duplicate_payment"
-        elif booking["status"] != "confirmed":
+        elif not booking_open_for_payment(db, booking["id"], order["owner"]):
             issue = "booking_not_confirmed"
     db.execute(
         "INSERT INTO receipts VALUES(?,?,?,?,?,?,?,?)",
@@ -194,7 +194,9 @@ def checkout_open(db, order, now):
 
 def booking_open_for_payment(db, booking_id, owner):
     booking = object_get(db, booking_id, "booking", owner)
-    return booking["status"] == "confirmed" and booking["data"].get("paid_at") is None
+    from .consultation_journey import payable_booking
+
+    return payable_booking(booking)
 
 
 def fulfill(db, order, paid_at, now):

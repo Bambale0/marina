@@ -10,6 +10,27 @@ def client_view(obj):
         from .funnel import public_run
 
         return public_run(obj)
+    if kind == "video_task":
+        obj["data"] = {
+            k: v
+            for k, v in d.items()
+            if k
+            in (
+                "lead_id",
+                "amount_rub",
+                "rules",
+                "assignment",
+                "videos",
+                "recommendations",
+                "due_at",
+                "assigned_at",
+                "submitted_at",
+                "answered_at",
+                "answer_attachments",
+            )
+        }
+        obj["data"]["videos"] = [{"slot": v["slot"]} for v in d.get("videos", [])]
+        return obj
     if kind == "video_review":
         from .crm import client_review
 

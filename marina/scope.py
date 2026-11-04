@@ -3,7 +3,7 @@
 from . import require
 from .commerce import policies
 
-SERVICES = ("pdf", "case", "subscription", "course", "booking", "guide")
+SERVICES = ("pdf", "case", "subscription", "course", "booking", "guide", "video_task")
 
 
 def enabled_services(db):
