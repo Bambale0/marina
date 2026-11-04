@@ -1427,6 +1427,11 @@ def notify_funnel(app, owner, id, event):
         require(account, "Получатель не найден")
         if account["blocked"]:
             return
+        if event.startswith(("funnel.followup", "funnel.refusal")):
+            from .privacy import marketing_allowed
+
+            if not marketing_allowed(db, owner):
+                return
         d = obj["data"]
         snapshot = d.get("snapshot", {})
         if event == "funnel.age":

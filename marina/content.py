@@ -352,14 +352,21 @@ def register_content(app):
         ]
         if kind == "product":
             from .commerce import provider_enabled
+            from .scope import service_enabled
 
             rows = [
                 o
                 for o in rows
-                if provider_enabled(
+                if service_enabled(g.db, o["data"].get("service"))
+                and provider_enabled(
                     current_app, "stars" if o["data"].get("currency") == "XTR" else "lava"
                 )
             ]
+        if kind == "exercise":
+            from .scope import service_enabled
+
+            if not service_enabled(g.db, "subscription"):
+                rows = []
         subject_id = request.args.get("subject_id")
         if subject_id and kind in ("method", "course"):
             from . import age_months
@@ -459,6 +466,21 @@ def validate(obj):
         )
         guide_commerce = d.get("type") == "commerce" and d.get("scope") in ("guide", "consultation")
         require(d.get("terms") or guide_commerce, "Укажите условия и основание решения")
+        if d["type"] == "privacy":
+            for key in ("require_representative_confirmation", "require_marketing_consent"):
+                require(
+                    key not in d or type(d[key]) is bool,
+                    "Подтверждения должны быть логическими значениями",
+                )
+            for key in ("consent_text", "marketing_consent_text"):
+                require(
+                    key not in d or isinstance(d[key], str), "Текст согласия должен быть строкой"
+                )
+            require(
+                not d.get("require_representative_confirmation")
+                or bool(d.get("consent_text", "").strip()),
+                "Добавьте отдельный текст согласия",
+            )
         if d["type"] == "commerce":
             if guide_commerce:
                 offer = g.db.execute(
@@ -645,6 +667,15 @@ def validate(obj):
         )
 
     if obj["kind"] == "policy" and d["type"] == "operations":
+        if "enabled_services" in d:
+            from .scope import SERVICES
+
+            require(
+                isinstance(d["enabled_services"], list)
+                and all(isinstance(v, str) and v in SERVICES for v in d["enabled_services"])
+                and len(d["enabled_services"]) == len(set(d["enabled_services"])),
+                "Выберите доступные услуги без повторов",
+            )
         require(
             type(d.get("pause_sales", True)) is bool
             and type(d.get("max_open_orders", 0)) is int

@@ -17,6 +17,7 @@ let token = sessionStorage.getItem("marina-token"),
   me,
   current,
   selected = sessionStorage.getItem("subject");
+const serviceEnabled = (service) => !me?.enabled_services || me.enabled_services.includes(service);
 const states = {
   awaiting_video: "Ожидаем видео",
   video_received: "Видео получено",
@@ -245,7 +246,7 @@ async function refresh() {
       ["analytics", "Отчёты", analyticsPage],
       ["audit", "Аудит", auditPage],
     );
-  for (const [id, title, fn] of pages) {
+  for (const [id, title, fn] of pages.filter(([id]) => id !== "training" || serviceEnabled("subscription"))) {
     const b = button(
       title,
       async () => {
@@ -290,7 +291,9 @@ async function home() {
       el(
         "p",
         {},
-        "Выберите следующий шаг: понять особенности развития, обратиться к специалисту или начать занятия.",
+        serviceEnabled("subscription")
+          ? "Выберите следующий шаг: понять особенности развития, обратиться к специалисту или начать занятия."
+          : "Пройдите скрининг, откройте руководство или запишитесь на онлайн-диагностику.",
       ),
       button("Выбрать профиль", profiles),
     ),
@@ -321,7 +324,7 @@ async function home() {
         ),
         button("Записаться", newBooking),
       ),
-      el(
+      serviceEnabled("subscription") ? el(
         "section",
         { class: "card" },
         el("span", { class: "badge" }, "10–15 минут в день"),
@@ -334,7 +337,7 @@ async function home() {
             : "Первые 72 часа доступны бесплатно с первого запуска готового комплекса.",
         ),
         button("Открыть занятия", training),
-      ),
+      ) : null,
     ),
   );
 }
@@ -477,9 +480,9 @@ async function attempt(id) {
         button("Подробный PDF", () =>
           shop("pdf", a.subject, { attempt_id: a.id }),
         ),
-        button("Разбор специалиста", () => shop("case", a.subject)),
+        serviceEnabled("case") ? button("Разбор специалиста", () => shop("case", a.subject)) : null,
         button("Записаться на встречу", () => newBooking(a.subject), true),
-        button("Перейти к занятиям", training, true),
+        serviceEnabled("subscription") ? button("Перейти к занятиям", training, true) : null,
       ),
     );
     return;
@@ -1145,14 +1148,26 @@ async function privacyGate() {
     );
     return false;
   }
+  const representative = field("Я совершеннолетний участник или законный представитель ребёнка", "checkbox", false);
+  const marketing = field("Хочу получать предложения и акции сервиса в Telegram (необязательно)", "checkbox", false);
   main(
     heading("Условия обработки данных"),
     el("section", { class: "card readable" }, data.policy.data.terms),
-    button("Прочитал(а) и принимаю эту редакцию", async () => {
+    ...(data.policy.data.consent_text ? [el("h2", {}, "Отдельное согласие на обработку данных"), el("section", {class:"card readable"}, data.policy.data.consent_text)] : []),
+    ...(data.policy.data.require_representative_confirmation ? [representative.node] : []),
+    ...(data.policy.data.require_marketing_consent ? [marketing.node] : []),
+    button("Даю согласие на обработку данных", async () => {
+      if (data.policy.data.require_representative_confirmation && !representative.get()) {
+        notice("Подтвердите совершеннолетие или законное представительство", true);
+        return;
+      }
       await api("/consents", "POST", {
         policy_id: data.policy.id,
         accepted: true,
+        representative_confirmed: representative.get(),
       });
+      if (data.policy.data.require_marketing_consent)
+        await api("/marketing-consents", "POST", {policy_id:data.policy.id, accepted:marketing.get()});
       await profiles();
     }),
   );
@@ -1180,6 +1195,14 @@ async function dataPage() {
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 5000);
       }),
+      button("Отозвать согласие на обработку данных", async () => {
+        await api("/consents/revoke", "POST", {});
+        notice("Согласие отозвано. Специалист рассмотрит запрос и основания хранения данных.");
+      }),
+      ...(privacy.policy?.data.require_marketing_consent ? [button("Отказаться от рекламных сообщений", async () => {
+        await api("/marketing-consents", "POST", {policy_id:privacy.policy.id, accepted:false});
+        notice("Рекламные сообщения отключены. Оплаченные материалы доступны.");
+      })] : []),
       button(
         "Запросить удаление данных",
         async () => {

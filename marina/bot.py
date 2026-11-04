@@ -24,6 +24,7 @@ MENU = [
     ("Консультация", "booking", {}),
     ("Мои обращения", "history", {}),
     ("Оферта", "offer", {}),
+    ("Мои данные", "privacy_settings", {}),
 ]
 
 ADMIN_CONTENT_KINDS = [
@@ -200,6 +201,16 @@ class Bot:
         return {"inline_keyboard": rows}
 
     def send(self, text, buttons=None):
+        if buttons:
+            from .scope import action_service, service_enabled
+
+            with connect(self.app.config["DATABASE"]) as db:
+                buttons = [
+                    b
+                    for b in buttons
+                    if not action_service(b[1], b[2])
+                    or service_enabled(db, action_service(b[1], b[2]))
+                ]
         result = None
         while len(text) > 3800:
             split = text.rfind("\n", 0, 3800)
@@ -712,11 +723,35 @@ class Bot:
                 buttons,
             )
         else:
+            policy = privacy["policy"]["data"]
+            if policy.get("consent_text"):
+                send_file(
+                    self.app,
+                    self.chat,
+                    "privacy-policy.txt",
+                    policy["terms"].encode(),
+                    "text/plain; charset=utf-8",
+                )
+                send_file(
+                    self.app,
+                    self.chat,
+                    "privacy-consent.txt",
+                    policy["consent_text"].encode(),
+                    "text/plain; charset=utf-8",
+                )
             self.send(
-                privacy["policy"]["data"]["terms"],
+                (
+                    "Политика и отдельное согласие — в файлах выше. "
+                    "Подтверждаю, что я совершеннолетний участник или законный представитель ребёнка, "
+                    "и даю согласие на обработку данных в указанном объёме."
+                    if policy.get("consent_text")
+                    else policy["terms"]
+                ),
                 [
                     (
-                        "Прочитал(а) и принимаю",
+                        "Даю согласие на обработку данных"
+                        if policy.get("consent_text")
+                        else "Прочитал(а) и принимаю",
                         "consent",
                         {
                             "id": privacy["policy"]["id"],
@@ -806,6 +841,12 @@ class Bot:
         )
 
     def action(self, action, d):
+        from .scope import action_service, require_service
+
+        service = action_service(action, d)
+        if service:
+            with connect(self.app.config["DATABASE"]) as db:
+                require_service(db, service)
         from .consultation_bot import handle_action as handle_consultation
         from .funnel_bot import handle_action
 
@@ -815,7 +856,54 @@ class Bot:
             return
         if handle_action(self, action, d):
             return
-        if action == "offer":
+        if action == "privacy_settings":
+            self.send(
+                "Документы и управление данными. Отзыв согласия не удаляет обязательные финансовые записи автоматически.",
+                [
+                    ("Политика и отдельное согласие", "privacy_documents", {}),
+                    ("Выгрузить мои данные", "privacy_export", {}),
+                    ("Отозвать согласие", "privacy_revoke", {}),
+                    ("Запросить удаление данных", "privacy_delete", {}),
+                    ("В меню", "menu", {}),
+                ],
+            )
+        elif action == "privacy_documents":
+            policy = self.api("/privacy")["policy"]
+            require(policy, "Политика готовится")
+            send_file(
+                self.app,
+                self.chat,
+                "privacy-policy.txt",
+                policy["data"]["terms"].encode(),
+                "text/plain; charset=utf-8",
+            )
+            if policy["data"].get("consent_text"):
+                send_file(
+                    self.app,
+                    self.chat,
+                    "privacy-consent.txt",
+                    policy["data"]["consent_text"].encode(),
+                    "text/plain; charset=utf-8",
+                )
+        elif action == "privacy_export":
+            send_file(
+                self.app,
+                self.chat,
+                "my-data.json",
+                json.dumps(self.api("/data-export"), ensure_ascii=False, indent=2).encode(),
+                "application/json",
+            )
+        elif action == "privacy_revoke":
+            self.api("/consents/revoke", "POST", {})
+            self.send(
+                "Согласие отозвано. Запрос передан специалисту для проверки оснований хранения и удаления. Уже оплаченные материалы сохраняются."
+            )
+        elif action == "privacy_delete":
+            self.api("/data-requests", "POST", {"type": "delete"})
+            self.send(
+                "Запрос на удаление принят. Специалист проверит, какие данные могут быть удалены и какие необходимо сохранить по закону."
+            )
+        elif action == "offer":
             offer = self.api("/offer")
             send_file(
                 self.app,
@@ -1035,8 +1123,40 @@ class Bot:
             if not self.privacy_gate():
                 return
             self.profile_menu()
-        elif action == "consent":
-            self.api("/consents", "POST", {"policy_id": d["id"], "accepted": True})
+        elif action in ("consent", "marketing_choice"):
+            if action == "consent":
+                self.api(
+                    "/consents",
+                    "POST",
+                    {"policy_id": d["id"], "accepted": True, "representative_confirmed": True},
+                )
+                privacy = self.api("/privacy")
+                if privacy["policy"]["data"].get("require_marketing_consent"):
+                    return self.send(
+                        privacy["policy"]["data"].get(
+                            "marketing_consent_text",
+                            "Получать предложения и акции сервиса в Telegram?",
+                        )
+                        + "\n\nЭто необязательно и не влияет на скрининг, купленные материалы или запись.",
+                        [
+                            (
+                                "Да, получать предложения",
+                                "marketing_choice",
+                                {**d, "accepted": True},
+                            ),
+                            (
+                                "Нет, продолжить без рекламы",
+                                "marketing_choice",
+                                {**d, "accepted": False},
+                            ),
+                        ],
+                    )
+            else:
+                self.api(
+                    "/marketing-consents",
+                    "POST",
+                    {"policy_id": d["id"], "accepted": d.get("accepted") is True},
+                )
             if d.get("next_action") in (
                 "choose_concern",
                 "continue_concern",
@@ -2184,11 +2304,20 @@ class Bot:
         if text in ("/continue", "/result"):
             return self.action("funnel_resume", {})
         if text == "/stop":
+            privacy = self.api("/privacy")
+            if privacy["policy"] and privacy["policy"]["data"].get("require_marketing_consent"):
+                self.api(
+                    "/marketing-consents",
+                    "POST",
+                    {"policy_id": privacy["policy"]["id"], "accepted": False},
+                )
             self.api("/funnel/stop", "POST", {})
             self.state_set(step=None)
             return self.send(
                 "Напоминания и предложения отключены. Результаты и оплаченные материалы сохранятся в чате."
             )
+        if text in ("/privacy", "/mydata"):
+            return self.action("privacy_settings", {})
         if text == "/paysupport":
             from .funnel import published
 

@@ -1,7 +1,23 @@
-from flask import g
+import hashlib
+import json
+
+from flask import g, render_template_string
 from . import body, object_get, protected, reason, require
 from .commerce import policies
-from .db import audit, insert, unpack, update
+from .db import audit, connect, insert, unpack, update
+
+
+def marketing_allowed(db, actor):
+    policy = policies(db, "privacy")
+    if not policy or not policy["data"].get("require_marketing_consent"):
+        return True
+    row = db.execute(
+        "SELECT data FROM objects WHERE kind='marketing_consent' AND owner=? "
+        "ORDER BY created DESC,rowid DESC LIMIT 1",
+        (actor,),
+    ).fetchone()
+    choice = json.loads(row["data"]) if row else {}
+    return choice.get("accepted") is True and choice.get("policy_id") == policy["id"]
 
 
 def offer_accepted(db, actor):
@@ -28,13 +44,149 @@ def consent_required(db, actor, allow_offer=False):
         "Условия обработки данных ещё готовятся. Ввод персональных данных пока закрыт.",
     )
     accepted = db.execute(
-        "SELECT 1 FROM objects WHERE kind='consent' AND owner=? AND json_extract(data,'$.policy_id')=?",
+        "SELECT 1 FROM objects WHERE kind='consent' AND status='recorded' AND owner=? AND json_extract(data,'$.policy_id')=?",
         (actor, p["id"]),
     ).fetchone()
     require(accepted, "Сначала прочитайте и примите актуальные условия обработки данных")
 
 
 def register_privacy(app):
+    def public_policy():
+        with connect(app.config["DATABASE"]) as db:
+            p = policies(db, "privacy")
+        require(p, "Политика обработки данных ещё готовится", 404)
+        return {
+            "id": p["id"],
+            "title": p["data"].get("title", "Политика обработки данных"),
+            "terms": p["data"]["terms"],
+            "consent_text": p["data"].get("consent_text", ""),
+            "version": p["revision"],
+            "published_at": p["updated"],
+        }
+
+    @app.get("/api/privacy/current")
+    def current_privacy():
+        return public_policy()
+
+    @app.get("/privacy")
+    @app.get("/privacy/consent")
+    def public_privacy_page():
+        from flask import request
+
+        p = public_policy()
+        consent = request.path.endswith("/consent")
+        title = "Согласие на обработку персональных данных" if consent else p["title"]
+        text = p["consent_text"] if consent else p["terms"]
+        return render_template_string(
+            '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>{{ title }}</title><link rel="stylesheet" href="/static/style.css">'
+            '</head><body><main><h1>{{ title }}</h1><article class="readable">{{ text }}</article>'
+            '<p><a href="/privacy">Политика</a> · '
+            '<a href="/privacy/consent">Отдельное согласие</a></p></main></body></html>',
+            title=title,
+            text=text,
+        )
+
+    @app.get("/offer")
+    def public_offer_page():
+        with connect(app.config["DATABASE"]) as db:
+            row = db.execute(
+                "SELECT data FROM objects WHERE kind='template' AND status='published' "
+                "AND json_extract(data,'$.type')='offer' ORDER BY updated DESC,rowid DESC LIMIT 1"
+            ).fetchone()
+        require(row, "Оферта ещё готовится", 404)
+        data = json.loads(row["data"])
+        return render_template_string(
+            '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>{{ title }}</title><link rel="stylesheet" href="/static/style.css">'
+            '</head><body><main><h1>{{ title }}</h1><article class="readable">{{ text }}</article>'
+            '<p><a href="/privacy">Политика обработки данных</a></p></main></body></html>',
+            title=data["title"],
+            text=data["text"],
+        )
+
+    @app.post("/api/marketing-consents")
+    @protected()
+    def marketing_consent():
+        d = body()
+        p = policies(g.db, "privacy")
+        require(type(d.get("accepted")) is bool, "Выберите, получать ли предложения")
+        require(p and d.get("policy_id") == p["id"], "Откройте актуальные условия")
+        obj = insert(
+            g.db,
+            "marketing_consent",
+            {
+                "accepted": d["accepted"],
+                "policy_id": p["id"],
+                "at": g.now,
+                "text": p["data"].get(
+                    "marketing_consent_text", "Предложения и акции сервиса в Telegram"
+                ),
+            },
+            g.now,
+            g.actor["id"],
+            status="active" if d["accepted"] else "revoked",
+        )
+        if not d["accepted"]:
+            g.db.execute(
+                "UPDATE outbox SET status='cancelled',leased_until=NULL WHERE owner=? "
+                "AND status IN ('pending','processing') "
+                "AND (event LIKE 'funnel.followup%' OR event LIKE 'funnel.refusal%')",
+                (g.actor["id"],),
+            )
+        audit(
+            g.db,
+            g.actor["id"],
+            "marketing.choice",
+            obj,
+            g.now,
+            "Отдельный выбор рекламных сообщений",
+        )
+        return obj
+
+    @app.post("/api/consents/revoke")
+    @protected()
+    def revoke_consent():
+        body()
+        for row in g.db.execute(
+            "SELECT * FROM objects WHERE kind='consent' AND owner=? AND status='recorded'",
+            (g.actor["id"],),
+        ).fetchall():
+            obj = unpack(row)
+            result = update(g.db, obj, g.now, {**obj["data"], "revoked_at": g.now}, "revoked")
+            audit(
+                g.db, g.actor["id"], "consent.revoke", result, g.now, "Отзыв согласия пользователем"
+            )
+        obj = insert(
+            g.db, "data_request", {"type": "withdrawal"}, g.now, g.actor["id"], status="requested"
+        )
+        p = policies(g.db, "privacy")
+        insert(
+            g.db,
+            "marketing_consent",
+            {"accepted": False, "policy_id": p["id"] if p else None, "at": g.now},
+            g.now,
+            g.actor["id"],
+            status="revoked",
+        )
+        audit(
+            g.db,
+            g.actor["id"],
+            "data.request",
+            obj,
+            g.now,
+            "Отзыв согласия и проверка оснований хранения",
+        )
+        g.db.execute(
+            "UPDATE outbox SET status='cancelled',leased_until=NULL WHERE owner=? "
+            "AND status IN ('pending','processing') "
+            "AND (event LIKE 'funnel.followup%' OR event LIKE 'funnel.refusal%')",
+            (g.actor["id"],),
+        )
+        return {"ok": True, "request_id": obj["id"]}
+
     @app.post("/api/admin/media/<id>/delete")
     @protected(admin=True)
     def delete_media(id):
@@ -98,7 +250,7 @@ def register_privacy(app):
         accepted = bool(
             p
             and g.db.execute(
-                "SELECT 1 FROM objects WHERE kind='consent' AND owner=? AND json_extract(data,'$.policy_id')=?",
+                "SELECT 1 FROM objects WHERE kind='consent' AND status='recorded' AND owner=? AND json_extract(data,'$.policy_id')=?",
                 (g.actor["id"], p["id"]),
             ).fetchone()
         )
@@ -113,17 +265,35 @@ def register_privacy(app):
             p and d.get("policy_id") == p["id"] and d.get("accepted") is True,
             "Подтвердите актуальную редакцию условий",
         )
+        require(
+            not p["data"].get("require_representative_confirmation")
+            or d.get("representative_confirmed") is True,
+            "Подтвердите, что вы совершеннолетний участник или законный представитель ребёнка",
+        )
         from .screening import idempotent
 
+        revoked_count = g.db.execute(
+            "SELECT count(*) FROM objects WHERE kind='consent' AND owner=? "
+            "AND status='revoked' AND json_extract(data,'$.policy_id')=?",
+            (g.actor["id"], p["id"]),
+        ).fetchone()[0]
+        consent_key = p["id"] + (":renewal:" + str(revoked_count) if revoked_count else "")
         return idempotent(
             g.db,
             "consent:" + g.actor["id"],
-            p["id"],
+            consent_key,
             {"policy_id": p["id"]},
             lambda: insert(
                 g.db,
                 "consent",
-                {"policy_id": p["id"], "accepted_at": g.now},
+                {
+                    "policy_id": p["id"],
+                    "accepted_at": g.now,
+                    "policy_revision": p["revision"],
+                    "policy_digest": hashlib.sha256(p["data"]["terms"].encode()).hexdigest(),
+                    "consent_text_snapshot": p["data"].get("consent_text", p["data"]["terms"]),
+                    "representative_confirmed": d.get("representative_confirmed") is True,
+                },
                 g.now,
                 g.actor["id"],
                 status="recorded",
