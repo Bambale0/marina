@@ -92,6 +92,11 @@ def test_exact_price_and_preparation_before_scheduling(app, group, base, promo, 
     _, owner, _, booking, sent, files, j = journey_sale(app, group, base, promo, coupon)
     assert booking["status"] == "requested"
     assert booking["data"]["intake_display"]["profile"] == "Имя ребёнка, возраст и класс"
+    assert (
+        booking["data"]["intake_variables"][j["questions"][0]["storage_key"]]
+        == "Имя ребёнка, возраст и класс"
+    )
+    assert len(booking["data"]["intake_variables"]) == 3
     q = quote(owner, booking, amount=1)
     assert q.status_code == 201, q.json
     assert q.json["data"]["total"] == (promo * 100 if coupon else base)

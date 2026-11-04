@@ -842,6 +842,9 @@ def register_funnel(app):
             intake = {
                 "intake_answers": answers,
                 "intake_display": display,
+                "intake_variables": {
+                    q.get("storage_key", q["id"]): display[q["id"]] for q in journey["questions"]
+                },
                 "journey_snapshot": journey,
                 "payment_timing": journey["payment_timing"],
             }

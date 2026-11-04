@@ -104,6 +104,7 @@ def handle_action(bot, action, d):
     elif action == "outside_route":
         c = bot.api("/consultation-routes")
         require(d.get("route") in c["routes"], "Выберите категорию")
+        bot.state_set(lead_type=d["route"])
         r = c["routes"][d["route"]]
         price = str(r["amount_rub"]) + " ₽"
         bot.send(

@@ -48,6 +48,7 @@ for group, b in zip(
                 "prompt": prompt,
                 "options": options,
                 "allow_custom": n == 2,
+                "storage_key": re.search(r"([a-z][a-z0-9]*(?:_[a-z0-9]+)+)", following)[1],
             }
         )
         if n == 2:
