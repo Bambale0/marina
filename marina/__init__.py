@@ -77,6 +77,15 @@ def protected(admin=False):
                     403,
                 )
                 g.db = db
+                new_service = {
+                    "/api/cases": "case",
+                    "/api/plans": "subscription",
+                    "/api/lessons/start": "subscription",
+                }.get(request.path)
+                if request.method == "POST" and new_service:
+                    from .scope import require_service
+
+                    require_service(db, new_service)
                 if (
                     g.app.config.get("ENFORCE_CONSENT", True)
                     and request.method not in ("GET", "HEAD")
@@ -323,6 +332,8 @@ def create_app(config=None):
     @app.get("/api/me")
     @protected()
     def me():
+        from .scope import enabled_services
+
         subjects = [
             unpack(r)
             for r in g.db.execute(
@@ -338,6 +349,7 @@ def create_app(config=None):
             "subjects": subjects,
             "trial": dict(trial) if trial else None,
             "now": g.now,
+            "enabled_services": enabled_services(g.db),
         }
 
     @app.post("/api/subjects")

@@ -173,6 +173,10 @@ def is_admin(db, owner):
 
 def checkout_open(db, order, now):
     """New invoice eligibility only; received money still goes through confirm."""
+    from .scope import service_enabled
+
+    if not service_enabled(db, order["data"].get("product_snapshot", {}).get("service")):
+        return False
     if order["status"] != "pending" or order["data"]["expires"] <= now:
         return False
     if order["data"].get("booking_id"):
@@ -499,6 +503,9 @@ def register_commerce(app):
             ).fetchone()[0]
             require(count < ops["data"]["max_open_orders"], "Лимит заказов достигнут")
         product = p["data"]
+        from .scope import require_service
+
+        require_service(g.db, product["service"])
         provider = "stars" if product["currency"] == "XTR" else "lava"
         require(provider_enabled(app, provider), "Этот способ оплаты отключён")
         if product["service"] == "guide":
@@ -688,6 +695,9 @@ def register_commerce(app):
         q = object_get(g.db, d.get("quote_id"), "quote", g.actor["id"])
 
         def create():
+            from .scope import require_service
+
+            require_service(g.db, q["data"]["product_snapshot"]["service"])
             require(
                 provider_enabled(app, q["data"].get("provider")),
                 "Этот способ оплаты отключён",

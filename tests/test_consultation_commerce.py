@@ -88,6 +88,7 @@ def confirmed_consultation(
     confirm=True,
     legacy_run=False,
     regular_rub=None,
+    offer_id="fixture-consultation-offer",
 ):
     admin = login(app)
     tariff = product(
@@ -96,7 +97,7 @@ def confirmed_consultation(
         amount=base,
         currency="RUB",
         age_group=group,
-        lava_offer_id="fixture-consultation-offer",
+        lava_offer_id=offer_id,
         web_sales_approved=True,
     )
     path = Path(app.config["FUNNEL_SOURCE_PATH"])
