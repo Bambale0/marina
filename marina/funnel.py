@@ -97,6 +97,7 @@ def defaults(group):
         require(False, "Файл сценария ещё не загружен в закрытое хранилище")
     return {
         **data[group],
+        "consultation_product_id": data[group].get("consultation_product_id", ""),
         "welcome_text": WELCOME,
         "age_reminder_text": AGE_REMINDER,
         "tripwire_delay_seconds": data[group].get(
@@ -218,7 +219,12 @@ def validate_funnel(d):
         and re.fullmatch(r"[A-Za-z0-9_-]+\.pdf", d["guide_filename"]),
         "Укажите имя PDF латиницей",
     )
-    for key in ("guide_product_id", "free_material_id", "refusal_material_id"):
+    for key in (
+        "guide_product_id",
+        "consultation_product_id",
+        "free_material_id",
+        "refusal_material_id",
+    ):
         require(isinstance(d.get(key, ""), str), "Проверьте ссылку на материал или продукт")
     require(
         type(d.get("consultation_valid_days")) is int and 1 <= d["consultation_valid_days"] <= 365,
@@ -290,6 +296,43 @@ def owned_guide(db, owner, group, admin=False):
         if right["data"].get("access_source") != "admin" or admin:
             return right
     return None
+
+
+def consultation_promotion_eligible(db, run, now):
+    """Eligibility before reservation requires the delivered guide's active entitlement."""
+    from .commerce import is_admin
+
+    data = run["data"]
+    if (
+        not data.get("guide_delivered_at")
+        or data.get("dev_tripwire_accepted_at")
+        or data.get("consultation_expires", 0) <= now
+    ):
+        return False
+    row = db.execute(
+        "SELECT * FROM objects WHERE id=? AND kind='right' AND owner=? AND status='active'",
+        (data.get("guide_right_id"), run["owner"]),
+    ).fetchone()
+    right = unpack(row) if row else None
+    if not right or right["data"].get("service") != "guide":
+        return False
+    if right["data"].get("product_snapshot", {}).get("age_group") != data["child_age"]:
+        return False
+    if right["data"].get("access_source") == "admin":
+        return is_admin(db, run["owner"])
+    row = db.execute(
+        "SELECT * FROM objects WHERE id=? AND kind='order' AND owner=? AND status='paid'",
+        (right["data"].get("order_id"), run["owner"]),
+    ).fetchone()
+    order = unpack(row) if row else None
+    return bool(
+        order
+        and order["data"].get("access_source") != "admin"
+        and db.execute(
+            "SELECT 1 FROM receipts WHERE order_id=? AND status='confirmed'",
+            (order["id"],),
+        ).fetchone()
+    )
 
 
 def result_buttons(obj, prior_guide=None):
@@ -800,11 +843,7 @@ def register_funnel(app):
                     "source": copy.deepcopy(
                         obj["data"]["snapshot"].get("consultation_promo_source", {})
                     ),
-                    "eligible": bool(
-                        obj["data"].get("guide_delivered_at")
-                        and not obj["data"].get("dev_tripwire_accepted_at")
-                        and obj["data"].get("consultation_expires", 0) > g.now
-                    ),
+                    "eligible": consultation_promotion_eligible(g.db, obj, g.now),
                     "expires": obj["data"].get("consultation_expires"),
                 },
             },
@@ -837,11 +876,11 @@ def register_funnel(app):
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(obj["status"] == "completed", "Сначала завершите скрининг")
         data = obj["data"]
-        eligible = (
-            data.get("guide_delivered_at")
-            and not data.get("dev_tripwire_accepted_at")
-            and data.get("consultation_expires", 0) > g.now
-        )
+        if data.get("booking_id"):
+            booking = object_get(g.db, data["booking_id"], "booking", g.actor["id"])
+            eligible = booking["data"].get("promotion", {}).get("eligible") is True
+        else:
+            eligible = consultation_promotion_eligible(g.db, obj, g.now)
         key = "consultation_text" if eligible else "consultation_intro_text"
         return {"text": render_copy(data["snapshot"][key], data["snapshot"], g.actor["name"])}
 

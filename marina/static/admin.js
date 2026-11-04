@@ -9,6 +9,7 @@ const labels = {
   guide_pages: "Страницы руководства",
   guide_filename: "Имя PDF-файла",
   guide_product_id: "ID опубликованного тарифа руководства",
+  consultation_product_id: "ID опубликованного тарифа консультации",
   refusal_material_id: "ID материала после отказа для 7–9 или 10–14 лет",
   material_id: "ID опубликованного PDF-материала",
   asset_id: "ID файла материала",
@@ -131,7 +132,7 @@ const labels = {
   allow_external_ai: "Разрешена передача текста ИИ-провайдеру",
 };
 const templates = {
-  funnel: {},
+  funnel: { consultation_product_id: "" },
   onboarding: { age_group: "3-4", concerns: [] },
   decision: { owner: "", status: "open", epics: [], evidence: "" },
   material: {
@@ -208,6 +209,13 @@ const templates = {
   template: { type: "report", text: "", source: "" },
 };
 const policyTemplates = {
+  consultation: {
+    type: "commerce",
+    scope: "consultation",
+    offer_template_id: "",
+    quote_ttl_seconds: 900,
+    late_payment: "review",
+  },
   guide: {
     type: "commerce",
     scope: "guide",
@@ -558,7 +566,7 @@ async function adminTripwire() {
             el(
               "p",
               {},
-              String(product.amount) + " " + product.currency +
+              money(product.amount, product.currency) +
                 (product.lava_offer_configured ? " · Lava offer настроен" : " · нет Lava offer"),
             ),
             button("Открыть тариф", () => openContent(product.id), true),
@@ -645,7 +653,7 @@ async function editContent(obj, kind) {
       "Тип правил",
       Object.keys(policyTemplates).map((k) => [
         k,
-        k === "guide" ? "Разовая покупка PDF" : k,
+        k === "guide" ? "Разовая покупка PDF" : k === "consultation" ? "Оплата консультации" : k,
       ]),
     );
     modal(
@@ -1104,22 +1112,26 @@ async function adminCard(id) {
       "Подтверждённое поступление для полного возврата",
       card.receipts.map((r) => [
         r.charge,
-        r.provider + " · " + r.amount + " " + r.currency,
+        r.provider + " · " + money(r.amount, r.currency),
       ]),
     );
     actions.append(
       charge.node,
-      button(
+      card.receipts.some((r) => r.provider === "stars") ? button(
         "Запросить полный возврат Stars",
         async () => {
           const receipt = card.receipts.find((r) => r.charge === charge.get());
+          if (receipt.provider !== "stars") {
+            notice("Для возврата Stars выберите поступление Stars.", true);
+            return;
+          }
           await command("/admin/orders/" + id + "/refund", {
             charge: receipt.charge,
             amount: receipt.amount,
           });
         },
         true,
-      ),
+      ) : el("p", {}, "Возврат Lava.top оформляется в кабинете платёжного сервиса. Результат необходимо сверить с поступлением."),
     );
   }
   if (o.kind === "data_request")

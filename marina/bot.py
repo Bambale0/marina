@@ -806,10 +806,13 @@ class Bot:
         )
 
     def action(self, action, d):
+        from .consultation_bot import handle_action as handle_consultation
         from .funnel_bot import handle_action
 
         if action.startswith("admin_") or action in ("menu", "queue"):
             self.cancel_admin_prompt()
+        if handle_consultation(self, action, d):
+            return
         if handle_action(self, action, d):
             return
         if action == "offer":
@@ -1324,12 +1327,15 @@ class Bot:
                 "Задайте одно уточнение по той же проблеме. Для новой проблемы нужен отдельный разбор."
             )
         elif action == "booking_confirm":
-            self.api(
+            booking = self.api(
                 "/bookings/" + d["id"] + "/confirm",
                 "POST",
                 {"proposal_id": d["proposal_id"]},
             )
             self.send("Время подтверждено.", MENU)
+            from .consultation_bot import offer_payment
+
+            offer_payment(self, booking)
         elif action == "admin_menu":
             self.admin_menu()
         elif action == "admin_content_kinds":
@@ -1858,6 +1864,10 @@ class Bot:
             if d.get("connection"):
                 text += "\nСсылка встречи: " + d["connection"]
             self.send(text, buttons)
+            if obj["status"] == "confirmed":
+                from .consultation_bot import offer_payment
+
+                offer_payment(self, obj)
         elif kind == "right" and d.get("service") == "guide":
             pdf = self.client.get("/api/guides/" + id + "/pdf")
             require(pdf.status_code == 200, "Руководство недоступно")
