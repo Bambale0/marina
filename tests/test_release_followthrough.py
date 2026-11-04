@@ -8,7 +8,7 @@ import pytest
 from marina.bot import Bot
 from marina.db import connect, insert, transaction, unpack, update
 from tests.test_identity import app, login
-from tests.test_funnel import setup_sale, finish, start, drain, capture
+from tests.test_funnel import private_source, setup_sale, finish, start, drain, capture
 from tests.test_commerce import pay
 
 
