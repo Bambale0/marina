@@ -266,14 +266,14 @@ def owned_guide(db, owner, group, admin=False):
     return None
 
 
-def result_buttons(obj):
+def result_buttons(obj, prior_guide=None):
     """Use the same result navigation for the first delivery and resume."""
     data = obj["data"]
     snapshot = data.get("snapshot", {})
     values = {"id": obj["id"]}
-    if data.get("owned_guide_id"):
-        return [("📄 Открыть руководство", "funnel_owned", {"right_id": data["owned_guide_id"]})]
     zone = data.get("result", {}).get("zone")
+    if prior_guide and zone == "yellow":
+        return [("📄 Открыть руководство", "funnel_owned", {"right_id": prior_guide["id"]})]
     if zone == "green":
         if snapshot.get("free_material_id"):
             return [("🎁 Игры по возрасту — PDF", "funnel_free", values)]
@@ -291,7 +291,10 @@ def public_run(obj):
     obj = copy.deepcopy(obj)
     d = obj["data"]
     if obj["status"] == "completed" and "snapshot" in d:
-        d["result_buttons"] = result_buttons(obj)
+        prior = owned_guide(
+            g.db, obj["owner"], d.get("child_age"), admin=g.actor["role"] == "admin"
+        )
+        d["result_buttons"] = result_buttons(obj, prior)
     snapshot = d.pop("snapshot", {})
     d.pop("approval", None)
     d.pop("progress_message_id", None)
@@ -627,6 +630,14 @@ def register_funnel(app):
                 {**entry["data"], "child_age": obj["data"]["child_age"]},
                 "age_selected",
             )
+        if obj["data"].get("owned_guide_id") and not owned_guide(
+            g.db, g.actor["id"], obj["data"].get("child_age"), admin=g.actor["role"] == "admin"
+        ):
+            data = dict(obj["data"])
+            data.pop("owned_guide_id", None)
+            obj = update(g.db, obj, g.now, data)
+            if data.get("result", {}).get("zone") == "yellow":
+                emit(g.db, obj["owner"], obj["id"], "funnel.offer", g.now)
         return public_run(obj)
 
     @app.post("/api/funnel-runs/<id>/answer")
@@ -1374,6 +1385,13 @@ def notify_funnel(app, owner, id, event):
                     and account["telegram_id"] not in app.config["ADMIN_TELEGRAM_IDS"]
                 ):
                     return
+        if event == "funnel.result":
+            prior_guide = owned_guide(
+                db,
+                owner,
+                d.get("child_age"),
+                admin=account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"],
+            )
         if event in ("funnel.offer", "funnel.cart.first", "funnel.cart.last"):
             prior_guide = owned_guide(
                 db,
@@ -1383,37 +1401,38 @@ def notify_funnel(app, owner, id, event):
             )
             if prior_guide and event.startswith("funnel.cart"):
                 return
-            dev_offer = bool(
-                event == "funnel.offer"
-                and app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
-                and not snapshot.get("guide_product_id")
-            )
-            if dev_offer:
-                price = "будет указана позже"
-            else:
-                if not snapshot.get("guide_product_id"):
-                    return
-                product = object_get(db, snapshot["guide_product_id"], "product")
-                external_lava = lava_guide_ready(app, product)
-                if product["status"] != "published" or not (
-                    product["data"].get("currency") == "XTR" or external_lava
-                ):
-                    return
-                price = price_text(product)
-            if event != "funnel.offer" and now >= d.get("offer_expires", 0):
-                return
-            if event.startswith("funnel.cart"):
-                order = object_get(db, d.get("order_id"), "order", owner)
-                if order["status"] != "pending":
-                    return
-                price = price_text(
-                    {
-                        "data": {
-                            "amount": order["data"]["total"],
-                            "currency": order["data"]["currency"],
-                        }
-                    }
+            if not prior_guide:
+                dev_offer = bool(
+                    event == "funnel.offer"
+                    and app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
+                    and not snapshot.get("guide_product_id")
                 )
+                if dev_offer:
+                    price = "будет указана позже"
+                else:
+                    if not snapshot.get("guide_product_id"):
+                        return
+                    product = object_get(db, snapshot["guide_product_id"], "product")
+                    external_lava = lava_guide_ready(app, product)
+                    if product["status"] != "published" or not (
+                        product["data"].get("currency") == "XTR" or external_lava
+                    ):
+                        return
+                    price = price_text(product)
+                if event != "funnel.offer" and now >= d.get("offer_expires", 0):
+                    return
+                if event.startswith("funnel.cart"):
+                    order = object_get(db, d.get("order_id"), "order", owner)
+                    if order["status"] != "pending":
+                        return
+                    price = price_text(
+                        {
+                            "data": {
+                                "amount": order["data"]["total"],
+                                "currency": order["data"]["currency"],
+                            }
+                        }
+                    )
         if event == "funnel.guide":
             dev_delivery = bool(d.get("dev_tripwire_accepted_at"))
             if d.get("guide_delivered_at"):
@@ -1488,7 +1507,7 @@ def notify_funnel(app, owner, id, event):
             )
     elif event == "funnel.result":
         text = d["result"]["text"] + "\n\n" + d["result"]["limitations"]
-        buttons = result_buttons(obj)
+        buttons = result_buttons(obj, prior_guide)
         if d.get("progress_message_id"):
             bot.edit(d["progress_message_id"], text, buttons)
         else:

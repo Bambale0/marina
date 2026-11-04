@@ -144,7 +144,7 @@ def work_once(app, send=None):
             "UPDATE outbox SET status='processing',attempts=attempts+1,leased_until=? WHERE id=?",
             (now + 60, event["id"]),
         )
-    outcome, result = "sent", None
+    outcome, result, awaiting_payment = "sent", None, False
     try:
         if event["event"] == "invoice.create":
             from .providers import invoice
@@ -163,8 +163,9 @@ def work_once(app, send=None):
         elif event["event"] == "payment.process":
             from .commerce import process_payment_event
 
+            awaiting_payment = process_payment_event(app, event["object_id"], now) is False
             require(
-                process_payment_event(app, event["object_id"], now) is not False,
+                not awaiting_payment,
                 "Подтверждение платежа ещё не получено",
                 503,
             )
@@ -293,7 +294,7 @@ def work_once(app, send=None):
                 "sent"
                 if outcome == "sent"
                 else "failed"
-                if current["attempts"] >= 8 and event["event"] != "payment.process"
+                if current["attempts"] >= 8 and not awaiting_payment
                 else "pending"
             )
         if event["event"] == "crm.message":
@@ -434,10 +435,28 @@ def register_operations(app):
     @app.get("/api/admin/queue")
     @protected(admin=True)
     def queue():
+        start = offset()
+        where = (
+            "kind IN ('video_review','report','case','booking','reconciliation',"
+            "'data_request','ai_job','refund','payment_event','retention_task') "
+            "AND status NOT IN ('published','closed','completed','cancelled',"
+            "'resolved','processed','confirmed')"
+        )
+        due_sql = (
+            "CASE WHEN kind='video_review' THEN json_extract(data,'$.next_contact') "
+            "WHEN status='followup_pending' THEN json_extract(data,'$.followup.due_at') "
+            "ELSE json_extract(data,'$.due_at') END"
+        )
+        total = g.db.execute("SELECT count(*) FROM objects WHERE " + where).fetchone()[0]
         rows = [
-            unpack(r)
-            for r in g.db.execute(
-                "SELECT * FROM objects WHERE kind IN ('video_review','report','case','booking','reconciliation','data_request','ai_job','refund','payment_event','retention_task') AND status NOT IN ('published','closed','completed','cancelled','resolved','processed','confirmed') ORDER BY created,id LIMIT 200"
+            unpack(row)
+            for row in g.db.execute(
+                "SELECT * FROM objects WHERE "
+                + where
+                + " ORDER BY COALESCE("
+                + due_sql
+                + ",1152921504606846976),created,id LIMIT 200 OFFSET ?",
+                (start,),
             )
         ]
         for obj in rows:
@@ -449,7 +468,7 @@ def register_operations(app):
                 else obj["data"].get("due_at")
             )
             obj.update(due_at=due, overdue=bool(due and due < g.now))
-        return {"items": sorted(rows, key=lambda o: o["due_at"] or 2**60)}
+        return {"items": rows, "total": total, "offset": start}
 
     @app.post("/api/admin/outbox/<id>/retry")
     @protected(admin=True)

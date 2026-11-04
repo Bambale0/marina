@@ -187,7 +187,11 @@ def setup_sale(app, group="3-4", currency="XTR", **product_fields):
         **product_fields,
     )
     config = scenario(
-        admin, group, guide_product_id=p["id"], contact_url="https://t.me/synthetic_fixture"
+        admin,
+        group,
+        guide_product_id=p["id"],
+        contact_url="https://t.me/synthetic_fixture",
+        tripwire_delay_seconds=180,
     )
     sent, files = capture(app)
     run = finish(owner, start(owner, group), ["b"] * 6)

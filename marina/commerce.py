@@ -370,6 +370,34 @@ def process_payment_event(app, event_id, now):
                     "SELECT 1 FROM receipts WHERE provider='lava' AND charge=?", (p["provider_id"],)
                 ).fetchone():
                     return False
+                for pending in db.execute(
+                    "SELECT * FROM objects WHERE kind='reconciliation' AND status='open' "
+                    "AND json_extract(data,'$.issue')='unmatched_lava_invoice' "
+                    "AND json_extract(data,'$.payment_event_id')=?",
+                    (event["id"],),
+                ).fetchall():
+                    issue = unpack(pending)
+                    resolved = update(
+                        db,
+                        issue,
+                        now,
+                        {
+                            **issue["data"],
+                            "resolved_at": now,
+                            "resolution": "invoice_matched",
+                            "payment_attempt_id": row["id"],
+                        },
+                        "resolved",
+                    )
+                    audit(
+                        db,
+                        "provider:lava",
+                        "payment.reconciliation_resolved",
+                        resolved,
+                        now,
+                        "Счёт сопоставлен; поступление записано",
+                        issue["revision"],
+                    )
             else:
                 existing = db.execute(
                     "SELECT 1 FROM objects WHERE kind='reconciliation' AND json_extract(data,'$.payment_event_id')=?",
