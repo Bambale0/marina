@@ -18,6 +18,8 @@ const labels = {
   consultation_intro_text: "Описание диагностики до покупки / после истечения промокода",
   consultation_valid_days: "Срок действия промокода, дней",
   consultation_code: "Промокод",
+  consultation_promo_terms: "Условия промокода из PDF",
+  consultation_promo_source: "PDF-источник условий промокода",
   consultation_amount_rub: "Цена диагностики по промокоду, ₽",
   consultation_regular_rub: "Обычная цена диагностики, ₽",
   success_text: "Сообщение после оплаты",

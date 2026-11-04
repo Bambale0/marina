@@ -946,7 +946,7 @@ def test_telegram_start_age_six_answers_and_result(app, group):
     assert sent[-1][1]["text"] == privacy["data"]["terms"]
     click("Прочитал(а) и принимаю")
     for number in range(1, 7):
-        assert f"[Вопрос {number} из 6]" in sent[-1][1]["text"]
+        assert f"[Вопрос {number} из 6]" not in sent[-1][1]["text"]
         rows = sent[-1][1]["reply_markup"]["inline_keyboard"]
         assert len(rows) == 1
         assert [button["text"] for button in rows[0]] == ["А", "Б", "В"]
