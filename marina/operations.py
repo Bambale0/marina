@@ -128,6 +128,18 @@ def work_once(app, send=None):
             "invoice.create",
             "refund.create",
         )
+        if event["event"] == "invoice.create" and event["status"] == "pending":
+            from .commerce import checkout_open
+
+            attempt = object_get(db, event["object_id"], "payment_attempt")
+            order = object_get(db, attempt["data"]["order_id"], "order")
+            if attempt["status"] == "queued" and not checkout_open(db, order, now):
+                update(db, attempt, now, status="cancelled")
+                db.execute(
+                    "UPDATE outbox SET status='cancelled',leased_until=NULL WHERE id=?",
+                    (event["id"],),
+                )
+                return 1
         db.execute(
             "UPDATE outbox SET status='processing',attempts=attempts+1,leased_until=? WHERE id=?",
             (now + 60, event["id"]),
@@ -151,7 +163,11 @@ def work_once(app, send=None):
         elif event["event"] == "payment.process":
             from .commerce import process_payment_event
 
-            process_payment_event(app, event["object_id"], now)
+            require(
+                process_payment_event(app, event["object_id"], now) is not False,
+                "Подтверждение платежа ещё не получено",
+                503,
+            )
         elif event["event"] == "ai.generate":
             from .ai import generate
 
@@ -274,7 +290,11 @@ def work_once(app, send=None):
                 update(db, job, now, status="failed")
         else:
             state = (
-                "sent" if outcome == "sent" else "failed" if current["attempts"] >= 8 else "pending"
+                "sent"
+                if outcome == "sent"
+                else "failed"
+                if current["attempts"] >= 8 and event["event"] != "payment.process"
+                else "pending"
             )
         if event["event"] == "crm.message":
             from .crm import message_delivery
@@ -282,7 +302,7 @@ def work_once(app, send=None):
             message_delivery(db, event, now, outcome == "sent")
         db.execute(
             "UPDATE outbox SET status=?,available=?,leased_until=NULL WHERE id=?",
-            (state, now + min(3600, 2 ** current["attempts"] * 10), event["id"]),
+            (state, now + min(3600, 2 ** min(current["attempts"], 9) * 10), event["id"]),
         )
     return 1
 

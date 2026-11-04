@@ -51,64 +51,37 @@ def finish(client, run, values):
     return run
 
 
-def test_result_waits_30_seconds_and_edits_one_progress_message(app):
+def test_result_waits_three_seconds_and_edits_one_progress_message(app):
+    # The supplied owner document replaces the former 30-second preview contract.
     admin, owner = login(app), login(app, 2)
     scenario(admin)
     calls = []
 
     def transport(method, url, data, headers):
-        telegram_method = url.rsplit("/", 1)[-1]
-        calls.append((telegram_method, data))
+        calls.append((url.rsplit("/", 1)[-1], data))
         return {"ok": True, "result": {"message_id": 77}}
 
     app.config["HTTP_TRANSPORT"] = transport
     run = finish(owner, start(owner), ["b"] * 6)
-    completed_at = run["data"]["completed_at"]
     with connect(app.config["DATABASE"]) as db:
-        events = db.execute(
+        rows = db.execute(
             "SELECT event,available FROM outbox WHERE object_id=? ORDER BY available,event",
             (run["id"],),
         ).fetchall()
-    assert [(row["event"], row["available"] - completed_at) for row in events] == [
+    assert [(r["event"], r["available"] - run["data"]["completed_at"]) for r in rows] == [
         ("funnel.progress.0", 0),
-        ("funnel.progress.1", 5),
-        ("funnel.progress.2", 10),
-        ("funnel.progress.3", 15),
-        ("funnel.progress.4", 20),
-        ("funnel.progress.5", 25),
-        ("funnel.result", 30),
+        ("funnel.result", 3),
     ]
-
     drain(app)
-    assert calls == [
-        (
-            "sendMessage",
-            {
-                "chat_id": 2,
-                "text": "Обрабатываю ваши ответы и готовлю результат…\n\n⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0%",
-            },
-        )
-    ]
-    visible = owner.get("/api/funnel-runs/" + run["id"]).json
-    assert "progress_message_id" not in visible["data"]
-    assert "progress_percent" not in visible["data"]
-    for percent in (20, 40, 60, 80, 100):
-        app.clock[0] += 5
-        drain(app)
-        assert calls[-1][0] == "editMessageText"
-        assert calls[-1][1]["message_id"] == 77
-        assert calls[-1][1]["text"].endswith(
-            "🟩" * (percent // 10) + "⬜" * (10 - percent // 10) + f" {percent}%"
-        )
-    app.clock[0] += 4
+    assert len(calls) == 1 and calls[0][0] == "sendMessage"
+    app.clock[0] += 2
     drain(app)
-    assert not any("ИТОГ СКРИНИНГА" in call[1].get("text", "") for call in calls)
+    assert len(calls) == 1
     app.clock[0] += 1
     drain(app)
-    assert calls[-1][0] == "editMessageText"
-    assert calls[-1][1]["message_id"] == 77
+    assert calls[-1][0] == "editMessageText" and calls[-1][1]["message_id"] == 77
     assert "ИТОГ СКРИНИНГА" in calls[-1][1]["text"]
-    assert len([call for call in calls if call[0] == "sendMessage"]) == 1
+    assert "progress_message_id" not in owner.get("/api/funnel-runs/" + run["id"]).json["data"]
 
 
 @pytest.mark.parametrize("group", ["3-4", "5-6", "7-9", "10-14"])
@@ -1125,12 +1098,12 @@ def test_paid_guide_retry_and_followup_cancellation(app, stop_kind):
     def failing_success(method, url, data, headers):
         if "Оплата прошла успешно" in data.get("text", "") and not failed:
             failed.append(True)
-            raise RuntimeError("Synthetic sendMessage failure after sendDocument")
+            raise RuntimeError("Synthetic confirmation failure before sendDocument")
         return transport(method, url, data, headers)
 
     app.config["HTTP_TRANSPORT"] = failing_success
     drain(app)
-    assert len(files) == 1
+    assert len(files) == 0  # Confirmation precedes the file, per the source document.
     app.clock[0] += 60
     drain(app)
     assert len(files) == 1
@@ -1219,7 +1192,10 @@ def test_result_removes_consultation_buttons_but_keeps_configured_paths(app):
     drain(app)
     app.clock[0] += 30
     drain(app)
-    assert "reply_markup" not in sent[-1][1]
+    assert [b["text"] for row in sent[-1][1]["reply_markup"]["inline_keyboard"] for b in row] == [
+        "📋 Что входит в диагностику",
+        "📅 Записаться на диагностику",
+    ]
     assert "О диагностике" not in str(sent[-1])
     assert "Написать Марине" not in str(sent[-1])
     assert owner.get(f"/api/funnel-runs/{red['id']}/free-pdf").status_code == 403
@@ -1228,7 +1204,10 @@ def test_result_removes_consultation_buttons_but_keeps_configured_paths(app):
     bot = Bot(app, {"id": 2, "first_name": "Client"}, 2, 11760)
     bot.state_set(funnel_run_id=red["id"])
     bot.action("funnel_resume", {})
-    assert "reply_markup" not in sent[-1][1]
+    assert [b["text"] for row in sent[-1][1]["reply_markup"]["inline_keyboard"] for b in row] == [
+        "📋 Что входит в диагностику",
+        "📅 Записаться на диагностику",
+    ]
     assert "О диагностике" not in str(sent[-1])
     assert "Написать Марине" not in str(sent[-1])
     assert (
