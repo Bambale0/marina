@@ -27,9 +27,11 @@ def response_attachments(db, case, ids):
 
 def register_attachments(app):
     @app.post("/api/admin/cases/<id>/media")
+    @app.post("/api/admin/video-tasks/<id>/media")
     @protected(admin=True)
     def upload_response(id):
-        obj = object_get(g.db, id, "case")
+        parent_kind = "video_task" if request.path.startswith("/api/admin/video-tasks/") else "case"
+        obj = object_get(g.db, id, parent_kind)
         require(
             obj["status"] in ("submitted", "in_progress", "followup_pending"),
             "Сначала должен быть отправлен полный комплект",
@@ -60,7 +62,7 @@ def register_attachments(app):
             (
                 blob_id,
                 obj["owner"],
-                obj["subject"],
+                obj["subject"] or obj["id"],
                 id,
                 mime,
                 hashlib.sha256(data).hexdigest(),
@@ -86,9 +88,9 @@ def register_attachments(app):
             },
             g.now,
             obj["owner"],
-            obj["subject"],
+            obj["subject"] or obj["id"],
             "ready",
             id=blob_id,
         )
-        audit(g.db, g.actor["id"], "case.response-upload", media, g.now, why)
+        audit(g.db, g.actor["id"], parent_kind + ".response-upload", media, g.now, why)
         return media, 201

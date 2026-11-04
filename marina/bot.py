@@ -57,6 +57,8 @@ ADMIN_KIND_LABELS = {
     "report": "Отчёты",
     "right": "Права доступа",
     "video_review": "Видеоразборы",
+    "video_task": "Задания с видео",
+    "consultation_lead": "Другой возраст",
 }
 
 RELATED_OBJECT_KEYS = {
@@ -848,10 +850,14 @@ class Bot:
             with connect(self.app.config["DATABASE"]) as db:
                 require_service(db, service)
         from .consultation_bot import handle_action as handle_consultation
+        from .consultation_intake_bot import handle_action as handle_intake
+        from .video_task_bot import handle_action as handle_video_task
         from .funnel_bot import handle_action
 
         if action.startswith("admin_") or action in ("menu", "queue"):
             self.cancel_admin_prompt()
+        if handle_video_task(self, action, d) or handle_intake(self, action, d):
+            return
         if handle_consultation(self, action, d):
             return
         if handle_action(self, action, d):
@@ -940,6 +946,8 @@ class Bot:
                 "funnel_buy",
                 "funnel_accept_dev",
                 "funnel_resume",
+                "intake_start",
+                "outside_interest",
             ):
                 self.action(d["next_action"], d["choice"])
             else:
@@ -1170,6 +1178,8 @@ class Bot:
                 "funnel_buy",
                 "funnel_accept_dev",
                 "funnel_resume",
+                "intake_start",
+                "outside_interest",
             ):
                 self.action(d["next_action"], d["choice"])
             else:
@@ -1242,6 +1252,7 @@ class Bot:
                 if o["kind"]
                 in (
                     "video_review",
+                    "video_task",
                     "report",
                     "case",
                     "booking",
@@ -1434,6 +1445,10 @@ class Bot:
             self.send(
                 "Укажите email для электронного чека Lava.top. Он используется только для оформления платежа."
             )
+        elif action == "booking_preparation":
+            pdf = self.client.get("/api/bookings/" + d["id"] + "/preparation")
+            require(pdf.status_code == 200, (pdf.json or {}).get("error", "Памятка недоступна"))
+            send_file(self.app, self.chat, "preparation.pdf", pdf.data, "application/pdf")
         elif action == "card":
             self.card(d["id"], d["kind"])
         elif action == "case_submit":
@@ -1919,6 +1934,10 @@ class Bot:
         )
 
     def card(self, id, kind):
+        if kind == "video_task":
+            from .video_task_bot import show_task
+
+            return show_task(self, id)
         if kind == "video_review":
             obj = self.api("/video-reviews/" + id)
             from .crm import STATES
@@ -1984,6 +2003,15 @@ class Bot:
             if d.get("connection"):
                 text += "\nСсылка встречи: " + d["connection"]
             self.send(text, buttons)
+            if (
+                d.get("paid_at") is not None
+                and d.get("payment_timing") == "before_scheduling"
+                and obj["status"] != "cancelled"
+            ):
+                self.send(
+                    "Памятка подготовки доступна в вашей записи.",
+                    [("Скачать памятку подготовки", "booking_preparation", {"id": id})],
+                )
             if obj["status"] == "confirmed":
                 from .consultation_bot import offer_payment
 
@@ -2039,6 +2067,45 @@ class Bot:
                     {"id": id, "command": "cases/followup-answer"},
                 ),
             ]
+        elif o["kind"] == "consultation_lead":
+            buttons = (
+                [
+                    (
+                        "Закрыть обращение",
+                        "admin_command",
+                        {"id": id, "route": "consultation-leads", "command": "close"},
+                    )
+                ]
+                if o["status"] != "closed"
+                else []
+            )
+        elif o["kind"] == "video_task":
+            if o["status"] == "requested":
+                buttons = [
+                    (
+                        "Выдать задание родителю",
+                        "admin_text",
+                        {"id": id, "command": "video-tasks/assignment"},
+                    )
+                ]
+            else:
+                buttons = [("Посмотреть видео выполнения", "admin_video_task_files", {"id": id})]
+                if o["status"] == "submitted":
+                    buttons.append(
+                        (
+                            "Отправить коррекцию и рекомендации",
+                            "admin_text",
+                            {"id": id, "command": "video-tasks/recommendations"},
+                        )
+                    )
+            if o["status"] in ("requested", "awaiting_videos", "submitted"):
+                buttons.append(
+                    (
+                        "Закрыть видеоразбор",
+                        "admin_command",
+                        {"id": id, "route": "video-tasks", "command": "close"},
+                    )
+                )
         elif o["kind"] == "video_review":
             buttons = [
                 (
@@ -2716,6 +2783,14 @@ class Bot:
             if result.get("kind") == "object":
                 return self.admin_card(result["id"])
             return self.admin_content_card(result["id"])
+        if step == "video_task_upload":
+            from .video_task_bot import receive
+
+            return receive(self, message)
+        if step == "consultation_intake":
+            from .consultation_intake_bot import handle_text
+
+            return handle_text(self, text)
         if step == "funnel_checkout_email":
             attempt = self.api(
                 "/orders/" + self.state["data"]["funnel_order_id"] + "/checkout",

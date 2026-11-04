@@ -57,7 +57,9 @@ def register_consultation_commerce(app):
         body()  # The request carries no trusted price, product, coupon or ownership fields.
         booking = object_get(g.db, id, "booking", g.actor["id"])
         require(not booking["data"].get("paid_at"), "Консультация уже оплачена", 409)
-        require(booking["status"] == "confirmed", "Сначала подтвердите время консультации")
+        from .consultation_journey import payable_booking
+
+        require(payable_booking(booking), "Сначала подтвердите время консультации")
         run = object_get(g.db, booking["data"].get("run_id"), "funnel_run", g.actor["id"])
         require(run["status"] == "completed", "Скрининг не завершён")
         require(provider_enabled(app, "lava"), "Этот способ оплаты отключён")

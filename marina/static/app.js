@@ -20,6 +20,8 @@ let token = sessionStorage.getItem("marina-token"),
 const serviceEnabled = (service) => !me?.enabled_services || me.enabled_services.includes(service);
 const states = {
   awaiting_video: "Ожидаем видео",
+  awaiting_videos: "Ждём видео выполнения",
+  new: "Новое обращение",
   video_received: "Видео получено",
   in_review: "На просмотре",
   conclusion_sent: "Заключение отправлено",
@@ -57,6 +59,8 @@ const states = {
 };
 const kinds = {
   video_review: "Видео и диагностика",
+  video_task: "Видеоразбор выполнения задания",
+  consultation_lead: "Обращение специалисту",
   plan: "Будущий комплекс",
   media: "Медиафайл",
   retention_task: "Срок хранения файла",
@@ -1033,8 +1037,39 @@ async function clientCard(o) {
         ),
       );
   }
+  if(o.kind==="video_task") {
+    card.append(el("p",{class:"readable"},d.recommendations || d.assignment || "Специалист подготовит задание. Оно придёт в Telegram."));
+    if(o.status==="awaiting_videos") {
+      const uploaded=new Set(d.videos.map(v=>v.slot));
+      card.append(el("p",{},"Получено видео: "+uploaded.size+" из "+d.rules.required_videos));
+      for(let slot=1;slot<=d.rules.required_videos;slot++) if(!uploaded.has(slot)) {
+        const f=field("Видео выполнения пункта "+slot+" (MP4, до "+d.rules.max_video_seconds+" секунд)","file");
+        card.append(form("Пункт "+slot,[f],"Сохранить видео",async()=>{
+          if(!f.input.files[0]) throw new Error("Выберите видео");
+          const data=new FormData();data.append("slot",String(slot));data.append("file",f.input.files[0]);
+          await api("/video-tasks/"+o.id+"/video","POST",data);await history();
+        }));
+      }
+      if(uploaded.size===d.rules.required_videos) card.append(button("Отправить специалисту на разбор",async()=>{
+        await api("/video-tasks/"+o.id+"/submit","POST",{});await history();
+      }));
+    }
+    if(o.status==="closed") card.append(el("p",{},"Видеоразбор закрыт. Для продолжения свяжитесь со специалистом."));
+    if(o.status==="submitted") card.append(el("p",{},"Видео у специалиста. Коррекция и рекомендации придут в этот раздел и в Telegram."));
+    for(const aid of d.answer_attachments || []) card.append(button("Открыть материал рекомендаций",async()=>{
+      const url=await authenticatedFile("/media/"+aid);
+      window.open(url,"_blank","noopener");setTimeout(()=>URL.revokeObjectURL(url),60000);
+    },true));
+  }
+  if(o.kind==="consultation_lead") card.append(el("p",{},d.label),el("p",{},"Запрос передан специалисту."));
   if (o.kind === "booking") {
     card.append(el("p", {}, d.topic));
+    if(d.paid_at != null && d.payment_timing==="before_scheduling" && o.status!=="cancelled")
+      card.append(button("Скачать памятку подготовки",async()=>{
+        const url=await authenticatedFile("/bookings/"+o.id+"/preparation");
+        el("a",{href:url,download:"preparation.pdf"}).click();
+        setTimeout(()=>URL.revokeObjectURL(url),60000);
+      },true));
     const p = d.proposals?.find((p) => p.id === d.current_proposal);
     if (p)
       card.append(

@@ -90,6 +90,10 @@ def handle_action(bot, action, d):
         bot.api("/funnel-entries/" + entry_id + "/age", "POST", {"age_group": group})
         bot.state_set(step=None, funnel_age=group, funnel_entry_id=entry_id)
         if group == "outside":
+            response = bot.client.get("/api/consultation-routes")
+            if response.status_code == 200:
+                bot.action("outside_menu", {})
+                return True
             with connect(bot.app.config["DATABASE"]) as db:
                 obj = published(db)
             buttons = []
@@ -133,9 +137,33 @@ def handle_action(bot, action, d):
         bot.api("/funnel-runs/" + d["id"] + "/dev-tripwire-accept", "POST", {})
         bot.send("Принято. Готовлю тестовый PDF без списания оплаты.")
     elif action == "funnel_consultation":
+        response = bot.client.get("/api/funnel-runs/" + d["id"] + "/consultation-journey")
+        if response.status_code == 200:
+            details = response.json
+            from .funnel import price_text
+
+            price = price_text({"data": {"amount": details["amount_rub"] * 100, "currency": "RUB"}})
+            footer = (
+                "Стоимость по промокоду " + details["code"] + ": "
+                if details["eligible"]
+                else "Полная стоимость: "
+            ) + price
+            bot.state_set(step=None, consultation_intake=None)
+            bot.send(
+                details["journey"]["description"] + "\n\n💳 " + footer,
+                [
+                    ("📅 Записаться на диагностику", "intake_start", {"id": d["id"]}),
+                    ("💬 Задать вопрос лично специалисту", "funnel_contact", {"id": d["id"]}),
+                ],
+            )
+            return True
         text = bot.api("/funnel-runs/" + d["id"] + "/consultation")["text"]
         bot.send(text, [("📅 Записаться на диагностику", "funnel_book", {"id": d["id"]})])
     elif action == "funnel_book":
+        response = bot.client.get("/api/funnel-runs/" + d["id"] + "/consultation-journey")
+        if response.status_code == 200:
+            bot.action("intake_start", {"id": d["id"]})
+            return True
         if not bot.privacy_gate("funnel_book", {"id": d["id"]}):
             return True
         bot.state_set(step="funnel_booking", funnel_run_id=d["id"])

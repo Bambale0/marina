@@ -287,7 +287,8 @@ def register_services(app):
 
                 media = unpack(record)
                 if media["data"].get("purpose") == "specialist_response":
-                    case = object_get(g.db, media["data"]["case_id"], "case", g.actor["id"])
+                    case = object_get(g.db, media["data"]["case_id"], owner=g.actor["id"])
+                    require(case["kind"] in ("case", "video_task"), "Файл ответа не найден", 404)
                     require(
                         id in case["data"].get("answer_attachments", []),
                         "Файл ответа ещё не опубликован",

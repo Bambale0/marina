@@ -117,6 +117,10 @@ def published(db, group=None):
 
 
 def validate_funnel(d):
+    if d.get("consultation_journey") is not None:
+        from .consultation_journey import validate_journey
+
+        validate_journey(g.db, d["consultation_journey"])
     require(
         isinstance(d.get("age_group"), str) and d["age_group"] in AGES,
         "Выберите возрастную группу скрининга",
@@ -819,7 +823,31 @@ def register_funnel(app):
         require(obj["status"] == "completed", "Сначала завершите скрининг")
         if obj["data"].get("booking_id"):
             return object_get(g.db, obj["data"]["booking_id"], "booking", g.actor["id"])
-        preferences = body().get("preferences", "")
+        incoming = body()
+        preferences = incoming.get("preferences", "")
+        from .consultation_journey import journey_for, intake_payload, material_ready
+
+        journey = journey_for(g.db, obj)
+        intake = {}
+        if journey:
+            answers, display = intake_payload(journey, incoming.get("answers"))
+            if journey["payment_timing"] == "before_scheduling":
+                require(
+                    material_ready(g.db, journey.get("preparation_material_id")),
+                    "Авторская памятка пока недоступна. Свяжитесь со специалистом",
+                )
+                material = object_get(g.db, journey["preparation_material_id"], "material")
+                journey["preparation_asset_id"] = material["data"]["asset_id"]
+            preferences = display["slot"]
+            intake = {
+                "intake_answers": answers,
+                "intake_display": display,
+                "intake_variables": {
+                    q.get("storage_key", q["id"]): display[q["id"]] for q in journey["questions"]
+                },
+                "journey_snapshot": journey,
+                "payment_timing": journey["payment_timing"],
+            }
         require(
             isinstance(preferences, str) and 1 <= len(preferences.strip()) <= 2000,
             "Напишите удобное время и часовой пояс",
@@ -831,6 +859,7 @@ def register_funnel(app):
                 "run_id": id,
                 "topic": "Диагностика: " + AGES[obj["data"]["child_age"]],
                 "preferences": preferences.strip(),
+                **intake,
                 "proposals": [],
                 "current_proposal": None,
                 "promotion": {
