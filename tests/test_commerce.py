@@ -1,4 +1,7 @@
-from tests.test_identity import app, login
+import pytest
+from datetime import datetime, timezone
+
+from tests.test_identity import app, login, signed
 from tests.test_screening import publish, subject
 
 
@@ -53,7 +56,85 @@ def quote(c, p, subjects):
     )
 
 
+def prepare_lava_payment(app, order):
+    """Issue a synthetic invoice through public checkout before advancing the clock."""
+    from marina.operations import work_once
+
+    for key, value in {
+        "LAVA_API_KEY": "fixture-api-key",
+        "LAVA_WEBHOOK_SECRET": "fixture-webhook-key",
+        "PUBLIC_URL": "https://fixture.test",
+    }.items():
+        app.config[key] = app.config.get(key) or value
+    if "lava_test_clients" not in app.extensions:
+        clients = []
+        for user_id in (1, 2):
+            client = app.test_client()
+            response = client.post(
+                "/api/auth/telegram",
+                json={"init_data": signed(user_id, app.clock[0], query_id="lava-fixture")},
+            )
+            assert response.status_code == 200, response.json
+            client.environ_base["HTTP_AUTHORIZATION"] = "Bearer " + response.json["token"]
+            clients.append(client)
+        app.extensions["lava_test_clients"] = clients
+    admin, owner = app.extensions["lava_test_clients"]
+    attempts = admin.get("/api/admin/objects?kind=payment_attempt").json["items"]
+    existing = next(
+        (attempt for attempt in attempts if attempt["data"]["order_id"] == order["id"]), None
+    )
+    if existing and existing["status"] == "ready":
+        return existing
+    upstream = app.config.get("HTTP_TRANSPORT")
+
+    def transport(method, url, data, headers):
+        if url == "https://gate.lava.top/api/v3/invoice" and method == "POST":
+            return {
+                "id": "fixture-invoice-" + data["clientUtm"]["utm_source"],
+                "paymentUrl": "https://app.lava.top/fixture",
+            }
+        return upstream(method, url, data, headers) if upstream else {"ok": True, "result": True}
+
+    app.config["HTTP_TRANSPORT"] = transport
+    response = owner.post(
+        "/api/orders/" + order["id"] + "/checkout", json={"email": "buyer@example.test"}
+    )
+    assert response.status_code in (200, 202), response.json
+    attempt = response.json
+    for _ in range(50):
+        current = admin.get("/api/admin/objects/" + attempt["id"]).json["object"]
+        if current["status"] == "ready":
+            return current
+        assert work_once(app, send=lambda *args: None) == 1
+    pytest.fail("Synthetic Lava invoice did not become ready")
+
+
 def pay(app, order, charge="charge-1", amount=None):
+    if order["data"]["provider"] == "lava":
+        attempt = prepare_lava_payment(app, order)
+        provider_id = attempt["data"]["provider_id"]
+        upstream = app.config.get("HTTP_TRANSPORT")
+        paid_at = datetime.fromtimestamp(app.clock[0], timezone.utc).isoformat()
+
+        def transport(method, url, data, headers):
+            if method == "GET" and url == "https://gate.lava.top/api/v1/invoices/" + provider_id:
+                return {
+                    "id": provider_id,
+                    "status": "completed",
+                    "datetime": paid_at,
+                    "receipt": {
+                        "amount": (order["data"]["total"] if amount is None else amount) / 100,
+                        "currency": "RUB",
+                    },
+                }
+            return upstream(method, url, data, headers)
+
+        app.config["HTTP_TRANSPORT"] = transport
+        return app.test_client().post(
+            "/api/webhooks/lava",
+            headers={"X-Api-Key": app.config["LAVA_WEBHOOK_SECRET"]},
+            json={"eventType": "payment.success", "contractId": provider_id},
+        )
     c = app.test_client()
     app.config["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
     return c.post(
@@ -214,6 +295,7 @@ def test_confirmed_refund_only_revokes_its_own_purchase(app):
         order = c.post("/api/orders", json={"quote_id": q["id"], "key": "buy-" + str(i)}).json
         pay(app, order, "charge-" + str(i))
         orders.append(c.get("/api/orders/" + order["id"]).json)
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava"]
     app.config["HTTP_TRANSPORT"] = lambda *args: {"ok": True, "result": True}
     res = a.post(
         "/api/admin/orders/" + orders[0]["id"] + "/refund",
@@ -232,3 +314,203 @@ def test_confirmed_refund_only_revokes_its_own_purchase(app):
     assert len([r for r in rights if r["status"] == "active"]) == 1
     assert len([r for r in rights if r["status"] == "revoked"]) == 1
     assert c.get("/api/orders/" + orders[1]["id"]).json["status"] == "paid"
+
+
+def test_new_app_defaults_to_lava_only(tmp_path, monkeypatch):
+    from marina import create_app
+
+    monkeypatch.delenv("ENABLED_PAYMENT_PROVIDERS", raising=False)
+    configured = create_app({"DATABASE": str(tmp_path / "defaults.sqlite"), "TESTING": True})
+    assert configured.config["ENABLED_PAYMENT_PROVIDERS"] == ["lava"]
+
+
+def legacy_stars_order(app):
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava", "stars"]
+    admin, owner = login(app), login(app, 2)
+    policy(admin)
+    tariff = product(admin)
+    q = quote(owner, tariff, [subject(owner, "child")]).json
+    order = owner.post("/api/orders", json={"quote_id": q["id"], "key": "legacy"}).json
+    return admin, owner, tariff, q, order
+
+
+def test_lava_only_accepts_ruble_quote_from_telegram_and_creates_lava_invoice(app):
+    from marina.operations import work_once
+
+    app.config.update(
+        ENABLED_PAYMENT_PROVIDERS=["lava"],
+        LAVA_API_KEY="fixture",
+        LAVA_WEBHOOK_SECRET="fixture-webhook",
+        PUBLIC_URL="https://fixture.test",
+    )
+    admin, owner = login(app), login(app, 2)
+    policy(admin)
+    tariff = product(
+        admin, currency="RUB", amount=49000, web_sales_approved=True, lava_offer_id="fixture-offer"
+    )
+    response = quote(owner, tariff, [subject(owner, "child")])
+    assert response.status_code == 201, response.json
+    assert response.json["data"]["provider"] == "lava"
+    order = owner.post(
+        "/api/orders", json={"quote_id": response.json["id"], "key": "ruble-checkout"}
+    ).json
+    requests = []
+
+    def transport(method, url, data, headers):
+        requests.append((method, url, data))
+        return {"id": "fixture-invoice", "paymentUrl": "https://app.lava.top/fixture"}
+
+    app.config["HTTP_TRANSPORT"] = transport
+    checkout = owner.post(
+        "/api/orders/" + order["id"] + "/checkout", json={"email": "buyer@example.test"}
+    )
+    assert checkout.status_code == 202, checkout.json
+    assert work_once(app) == 1
+    assert len(requests) == 1
+    assert requests[0][0:2] == ("POST", "https://gate.lava.top/api/v3/invoice")
+    assert requests[0][2]["amount"] == 490
+    assert requests[0][2]["currency"] == "RUB"
+    assert pay(app, order).status_code == 200
+    assert pay(app, order).status_code == 200
+    assert owner.get("/api/orders/" + order["id"]).json["status"] == "paid"
+    assert (
+        len([item for item in owner.get("/api/history").json["items"] if item["kind"] == "right"])
+        == 1
+    )
+
+
+def test_disabled_stars_rejects_new_quotes(app):
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava"]
+    admin, owner = login(app), login(app, 2)
+    policy(admin)
+    tariff = product(admin)
+    response = quote(owner, tariff, [subject(owner, "child")])
+    assert response.status_code == 422
+
+
+def test_disabled_stars_rejects_new_order_from_saved_quote(app):
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava", "stars"]
+    admin, owner = login(app), login(app, 2)
+    policy(admin)
+    tariff = product(admin)
+    q = quote(owner, tariff, [subject(owner, "child")]).json
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava"]
+    response = owner.post("/api/orders", json={"quote_id": q["id"], "key": "disabled-order"})
+    assert response.status_code == 422
+
+
+def test_disabled_stars_checkout_does_not_return_an_existing_attempt(app):
+    _, owner, _, _, order = legacy_stars_order(app)
+    app.config["TELEGRAM_WEBHOOK_SECRET"] = "fixture-webhook"
+    first = owner.post("/api/orders/" + order["id"] + "/checkout", json={})
+    assert first.status_code == 202
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava"]
+    repeated = owner.post("/api/orders/" + order["id"] + "/checkout", json={})
+    assert repeated.status_code == 422
+    assert owner.get("/api/orders/" + order["id"]).status_code == 200
+
+
+def test_disabled_stars_precheckout_is_rejected_without_losing_later_payment(app):
+    _, owner, _, _, order = legacy_stars_order(app)
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava"]
+    app.config["TELEGRAM_WEBHOOK_SECRET"] = "fixture-webhook"
+    sent = []
+
+    def transport(method, url, data, headers):
+        sent.append((url.rsplit("/", 1)[-1], data))
+        return {"ok": True, "result": True}
+
+    app.config["HTTP_TRANSPORT"] = transport
+    response = app.test_client().post(
+        "/api/webhooks/telegram",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "fixture-webhook"},
+        json={
+            "pre_checkout_query": {
+                "id": "old-stars-precheckout",
+                "from": {"id": 2},
+                "invoice_payload": order["id"],
+                "total_amount": order["data"]["total"],
+                "currency": "XTR",
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert sent[-1][0] == "answerPreCheckoutQuery"
+    assert sent[-1][1]["ok"] is False
+    assert pay(app, order).status_code == 200
+    assert owner.get("/api/orders/" + order["id"]).json["status"] == "paid"
+    replay = owner.post(
+        "/api/orders", json={"quote_id": order["data"]["quote_id"], "key": "legacy"}
+    )
+    assert replay.status_code == 200
+    assert replay.json["id"] == order["id"]
+
+
+def test_stars_precheckout_cannot_approve_a_lava_order_even_when_stars_enabled(app):
+    admin, owner = login(app), login(app, 2)
+    policy(admin)
+    tariff = product(admin, currency="RUB", web_sales_approved=True)
+    q = quote(owner, tariff, [subject(owner, "child")]).json
+    order = owner.post("/api/orders", json={"quote_id": q["id"], "key": "ruble"}).json
+    app.config["TELEGRAM_WEBHOOK_SECRET"] = "fixture-webhook"
+    answers = []
+
+    def transport(method, url, data, headers):
+        answers.append(data)
+        return {"ok": True, "result": True}
+
+    app.config["HTTP_TRANSPORT"] = transport
+    response = app.test_client().post(
+        "/api/webhooks/telegram",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "fixture-webhook"},
+        json={
+            "pre_checkout_query": {
+                "id": "forged-precheckout",
+                "from": {"id": 2},
+                "invoice_payload": order["id"],
+                "total_amount": order["data"]["total"],
+                "currency": "XTR",
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert answers[-1]["ok"] is False
+
+
+def test_historical_stars_refund_event_is_processed_after_disabling_new_invoices(app):
+    _, owner, _, _, order = legacy_stars_order(app)
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava"]
+    assert pay(app, order).status_code == 200
+    response = app.test_client().post(
+        "/api/webhooks/telegram",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "test-secret"},
+        json={
+            "message": {
+                "from": {"id": 2},
+                "refunded_payment": {
+                    "invoice_payload": order["id"],
+                    "currency": "XTR",
+                    "total_amount": order["data"]["total"],
+                    "telegram_payment_charge_id": "charge-1",
+                },
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert owner.get("/api/orders/" + order["id"]).json["status"] == "refunded"
+    assert not [
+        item
+        for item in owner.get("/api/history").json["items"]
+        if item["kind"] == "right" and item["status"] == "active"
+    ]
+
+
+@pytest.mark.parametrize("provider", ["stars", "prodamus", "yookassa"])
+def test_disabled_invoice_provider_never_reaches_network(app, provider):
+    from marina import Problem
+    from marina.providers import invoice
+
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["lava"]
+    app.config["HTTP_TRANSPORT"] = lambda *args: pytest.fail("Disabled provider reached network")
+    with pytest.raises(Problem):
+        invoice(app, {"data": {"provider": provider}})

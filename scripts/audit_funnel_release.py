@@ -254,13 +254,12 @@ def main():
             )
         ):
             errors.append(f"{group}:guide_metadata_pages")
-        for key, label in (("free_material_id", "free"), ("refusal_material_id", "refusal")):
+        for key, label in (("refusal_material_id", "refusal"),) if group in ("7-9", "10-14") else ():
             if not data.get(key):
-                target = warnings if group == "5-6" and label == "refusal" else errors
-                target.append(f"{group}:{label}_material_missing")
+                errors.append(f"{group}:{label}_material_missing")
             else:
                 check_material(
-                    db, data[key], f"{group}:{label}", errors, allow_video=label == "refusal"
+                    db, data[key], f"{group}:{label}", errors
                 )
 
         product_row = db.execute(
@@ -317,6 +316,16 @@ def main():
         key: "present" if text(environment.get(key)) else "missing"
         for key in ("LAVA_API_KEY", "LAVA_WEBHOOK_SECRET")
     }
+    enabled_providers = [
+        value.strip()
+        for value in (
+            "lava" if environment.get("ENABLED_PAYMENT_PROVIDERS") is None
+            else environment["ENABLED_PAYMENT_PROVIDERS"]
+        ).lower().split(",")
+        if value.strip()
+    ]
+    if enabled_providers != ["lava"]:
+        errors.append("payment_provider_not_lava_only")
     for key, status in provider_keys.items():
         if status == "missing":
             (errors if args.require_environment else warnings).append("provider_key_missing:" + key)
@@ -338,6 +347,7 @@ def main():
         "commercial_ready": False,
         "environment_verified": environment_verified,
         "provider_keys": provider_keys,
+        "enabled_payment_providers": enabled_providers,
         "errors": errors,
         "warnings": warnings,
         "groups": groups,

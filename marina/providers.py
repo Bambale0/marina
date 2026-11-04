@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 from flask import g, request
 from . import Problem, body, object_get, protected, reason, require
-from .commerce import checkout_open, confirm
+from .commerce import checkout_open, confirm, provider_enabled
 from .db import audit, emit, insert, transaction, unpack, update
 
 
@@ -69,6 +69,7 @@ def lava(app, method, path, data=None):
 def invoice(app, attempt):
     """Called only after the durable attempt has committed. Never auto-retry Lava POST."""
     d = attempt["data"]
+    require(provider_enabled(app, d.get("provider")), "Этот способ оплаты отключён")
     if d["provider"] == "stars":
         link = telegram(
             app,
@@ -156,6 +157,10 @@ def register_providers(app):
             from .commerce import admin_fulfill
 
             return admin_fulfill(g.db, o, g.actor["id"], g.now)
+        require(
+            provider_enabled(app, o["data"].get("provider")),
+            "Этот способ оплаты отключён",
+        )
         require(
             checkout_open(g.db, o, g.now),
             "Счёт уже оплачен или истёк",

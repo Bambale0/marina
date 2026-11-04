@@ -72,9 +72,11 @@ def price_text(product):
 
 
 def lava_guide_ready(app, product):
+    from .commerce import provider_enabled
+
     data = product["data"]
     return bool(
-        app.config.get("DEV_EXTERNAL_LAVA_CHECKOUT", False)
+        provider_enabled(app, "lava")
         and data.get("currency") == "RUB"
         and data.get("web_sales_approved") is True
         and data.get("lava_offer_id")
@@ -281,8 +283,6 @@ def result_buttons(obj, prior_guide=None):
     if prior_guide and zone == "yellow":
         return [("📄 Открыть руководство", "funnel_owned", {"right_id": prior_guide["id"]})]
     if zone == "green":
-        if snapshot.get("free_material_id"):
-            return [("🎁 Игры по возрасту — PDF", "funnel_free", values)]
         if snapshot.get("channel_url"):
             return [("📚 Полезные материалы", "url", {"url": snapshot["channel_url"]})]
     if zone == "red":
@@ -378,9 +378,11 @@ def guide_paid(db, order, right, now):
 
 def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     """Use the existing quote/order/receipt pipeline for an age-only guide purchase."""
-    from .commerce import is_admin, policies
+    from .commerce import is_admin, policies, provider_enabled
 
     admin = is_admin(db, actor)
+    provider = "stars" if p["data"]["currency"] == "XTR" else "lava"
+    require(admin or provider_enabled(current_app, provider), "Этот способ оплаты отключён", 403)
     run = object_get(db, d.get("run_id"), "funnel_run", actor)
     r = run["data"]
     require(
@@ -399,13 +401,12 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     surface = d.get("surface")
     require(surface in ("telegram", "web"), "Укажите поверхность покупки")
     external_lava = (
-        surface == "telegram"
-        and p["data"]["currency"] == "RUB"
+        p["data"]["currency"] == "RUB"
         and allow_external_lava
         and p["data"].get("web_sales_approved") is True
     )
     require(
-        admin or surface != "telegram" or p["data"]["currency"] == "XTR" or external_lava,
+        admin or p["data"]["currency"] == "XTR" or external_lava,
         "Внешняя оплата цифрового материала для этой среды не разрешена",
     )
     require(
@@ -577,9 +578,6 @@ def register_funnel(app):
                 content, "Скрининг для этого возраста готовится. Можно обратиться к специалисту."
             )
             snapshot = copy.deepcopy(content["data"])
-            if snapshot.get("free_material_id"):
-                _, free_asset = material_asset(g.db, snapshot["free_material_id"])
-                snapshot["free_asset_id"] = free_asset["id"]
             # One active questionnaire per account. Old buttons cannot answer a new run.
             for row in g.db.execute(
                 "SELECT * FROM objects WHERE kind='funnel_run' AND owner=? AND status='in_progress'",
@@ -726,12 +724,18 @@ def register_funnel(app):
                 "tags": sorted(set(obj["data"]["tags"] + [snapshot["refused_tag"]])),
             },
         )
-        if snapshot.get("refusal_material_id"):
+        if snapshot.get("refusal_material_id") and snapshot["age_group"] != "3-4":
+            _, refusal_asset = material_asset(
+                g.db, snapshot["refusal_material_id"], ("application/pdf", "video/mp4")
+            )
+        else:
+            refusal_asset = None
+        if refusal_asset is not None and refusal_asset["mime"] == "application/pdf":
             schedule(
                 g.db,
                 result,
                 "funnel.refusal",
-                g.now + (4 if snapshot["age_group"] == "3-4" else 5) * 86400,
+                g.now + 5 * 86400,
             )
         audit(
             g.db,
@@ -939,9 +943,8 @@ def register_funnel(app):
     def free_pdf(id):
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(
-            obj["status"] == "completed"
-            and (g.actor["role"] == "admin" or obj["data"]["result"]["zone"] == "green"),
-            "Материал доступен после результата зелёной зоны",
+            obj["status"] == "completed" and g.actor["role"] == "admin",
+            "Результат скрининга не открывает доступ к платному PDF",
             403,
         )
         snapshot = obj["data"]["snapshot"]
@@ -1190,8 +1193,8 @@ def register_funnel(app):
                 "lava_api": bool(app.config.get("LAVA_API_KEY")),
                 "lava_webhook": bool(app.config.get("LAVA_WEBHOOK_SECRET")),
                 "public_https": str(app.config.get("PUBLIC_URL", "")).startswith("https://"),
-                "external_lava_test_mode": bool(
-                    app.config.get("DEV_EXTERNAL_LAVA_CHECKOUT", False)
+                "lava_checkout_enabled": bool(
+                    app.config.get("ENABLED_PAYMENT_PROVIDERS") == ["lava"]
                 ),
                 "tripwire_payment_bypass": bool(
                     app.config.get("DEV_TRIPWIRE_BYPASS_PAYMENT", False)
@@ -1420,9 +1423,12 @@ def notify_funnel(app, owner, id, event):
                         return
                     product = object_get(db, snapshot["guide_product_id"], "product")
                     external_lava = lava_guide_ready(app, product)
-                    if product["status"] != "published" or not (
-                        product["data"].get("currency") == "XTR" or external_lava
-                    ):
+                    from .commerce import provider_enabled
+
+                    stars_ready = product["data"].get("currency") == "XTR" and provider_enabled(
+                        app, "stars"
+                    )
+                    if product["status"] != "published" or not (stars_ready or external_lava):
                         return
                     price = price_text(product)
                 if event != "funnel.offer" and now >= d.get("offer_expires", 0):
@@ -1457,16 +1463,27 @@ def notify_funnel(app, owner, id, event):
                 ).fetchone()
                 require(blob, "PDF не найден")
         if event == "funnel.refusal":
-            if not d.get("refused_at") or d.get("order_status") == "paid" or d.get("booking_id"):
+            if (
+                snapshot.get("age_group") == "3-4"
+                or not snapshot.get("refusal_material_id")
+                or not d.get("refused_at")
+                or d.get("order_status") == "paid"
+                or d.get("booking_id")
+            ):
                 return
             _, blob = material_asset(
                 db, snapshot["refusal_material_id"], ("application/pdf", "video/mp4")
             )
+            if blob["mime"] != "application/pdf":
+                return
         if event.startswith("funnel.invoice."):
+            from .commerce import provider_enabled
+
             attempt = object_get(db, event.rsplit(".", 1)[-1], "payment_attempt", owner)
             order = object_get(db, attempt["data"]["order_id"], "order", owner)
             if (
                 attempt["status"] != "ready"
+                or not provider_enabled(app, attempt["data"]["provider"])
                 or order["status"] != "pending"
                 or order["data"]["expires"] <= now
                 or d.get("refused_at")
@@ -1667,14 +1684,13 @@ def notify_funnel(app, owner, id, event):
             )
         bot.send(render_copy(followup["text"], snapshot, account["name"], **copy_values), buttons)
     elif event == "funnel.refusal":
-        video = blob["mime"] == "video/mp4"
         send_file(
             app,
             account["telegram_id"],
-            "activity.mp4" if video else "checklist.pdf",
+            "checklist.pdf",
             blob["body"],
             blob["mime"],
-            "sendVideo" if video else "sendDocument",
+            "sendDocument",
         )
     elif event.startswith("funnel.invoice."):
         lava_checkout = attempt["data"]["provider"] == "lava"

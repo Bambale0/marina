@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from flask import g, request
+from flask import current_app, g, request
 from . import body, object_get, offset, protected, reason, require
 from .db import audit, insert, unpack, update
 
@@ -350,6 +350,16 @@ def register_content(app):
                 (kind,),
             )
         ]
+        if kind == "product":
+            from .commerce import provider_enabled
+
+            rows = [
+                o
+                for o in rows
+                if provider_enabled(
+                    current_app, "stars" if o["data"].get("currency") == "XTR" else "lava"
+                )
+            ]
         subject_id = request.args.get("subject_id")
         if subject_id and kind in ("method", "course"):
             from . import age_months

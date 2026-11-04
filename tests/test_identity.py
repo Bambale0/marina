@@ -30,6 +30,7 @@ def app(tmp_path):
         {
             "TESTING": True,
             "ENFORCE_CONSENT": False,
+            "ENABLED_PAYMENT_PROVIDERS": ["lava", "stars"],
             "SESSION_TTL": 30 * 24 * 3600,
             "DATABASE": str(tmp_path / "test.sqlite"),
             "BOT_TOKEN": "test-token",
