@@ -18,7 +18,7 @@ def repeat_buyer(app):
     assert pay(app, order).status_code == 200
     drain(app)
     again = finish(owner, start(owner, key="followthrough-repeat"), ["b"] * 6)
-    app.clock[0] += 3
+    app.clock[0] += 30
     drain(app)
     return admin, owner, again, product, sent
 

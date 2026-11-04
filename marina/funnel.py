@@ -47,13 +47,19 @@ PROFILE = {
     "Узнайте реальные причины сложностей с поведением, вниманием и речью вашего ребенка.\n"
     "Нажмите кнопку «СТАРТ» внизу ⬇️",
 }
-RESULT_WAIT_SECONDS = 3
-PROGRESS_STEPS = (0,)
-DEFAULT_TRIPWIRE_DELAY_SECONDS = 2
+RESULT_WAIT_SECONDS = 30
+PROGRESS_STEPS = (0, 20, 40, 60, 80, 100)
+DEFAULT_TRIPWIRE_DELAY_SECONDS = 3 * 60
 
 
 def progress_text(percent):
-    return "Обрабатываю ваши ответы и строю нейропрофиль... ⏳"
+    filled = percent // 10
+    return (
+        "Обрабатываю ваши ответы и готовлю результат…\n\n"
+        + "🟩" * filled
+        + "⬜" * (10 - filled)
+        + f" {percent}%"
+    )
 
 
 def price_text(product):

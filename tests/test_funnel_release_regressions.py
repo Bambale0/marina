@@ -118,7 +118,7 @@ def test_admin_free_pdf_does_not_claim_successful_payment(app):
         assert db.execute("SELECT count(*) FROM receipts").fetchone()[0] == 0
 
 
-def test_old_progress_event_after_deploy_is_a_safe_noop(app):
+def test_late_progress_event_never_overwrites_a_delivered_result(app):
     from marina.funnel import notify_funnel
 
     admin, owner = login(app), login(app, 2)
@@ -126,8 +126,12 @@ def test_old_progress_event_after_deploy_is_a_safe_noop(app):
     sent, _ = capture(app)
     run = finish(owner, start(owner), ["b"] * 6)
     account = owner.get("/api/me").json["account"]["id"]
+    drain(app)
+    app.clock[0] += 30
+    drain(app)
+    delivered = len(sent)
     notify_funnel(app, account, run["id"], "funnel.progress.5")
-    assert not sent
+    assert len(sent) == delivered
 
 
 def test_previous_buyer_gets_access_instead_of_a_second_offer(app):
@@ -137,7 +141,7 @@ def test_previous_buyer_gets_access_instead_of_a_second_offer(app):
     drain(app)
     again = finish(owner, start(owner, key="repeat-paid-guide"), ["b"] * 6)
     drain(app)
-    app.clock[0] += 3
+    app.clock[0] += 30
     drain(app)
     marker = len(sent)
     app.clock[0] += 180
