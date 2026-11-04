@@ -230,6 +230,24 @@ def validate_funnel(d):
         isinstance(d.get("consultation_code"), str) and d["consultation_code"].strip(),
         "Укажите промокод из документа",
     )
+    if "consultation_promo_terms" in d:
+        require(
+            isinstance(d["consultation_promo_terms"], str)
+            and 1 <= len(d["consultation_promo_terms"]) <= 16000,
+            "Укажите условия промокода из PDF",
+        )
+    if "consultation_promo_source" in d:
+        source = d["consultation_promo_source"]
+        require(
+            isinstance(source, dict)
+            and isinstance(source.get("material_id"), str)
+            and bool(source["material_id"])
+            and isinstance(source.get("pdf_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", source["pdf_sha256"])
+            and type(source.get("page")) is int
+            and source["page"] > 0,
+            "Укажите PDF-источник условий промокода",
+        )
     if d.get("guide_product_id"):
         require(d.get("contact_url"), "Укажите контакт специалиста для поддержки покупателей")
         p = object_get(g.db, d["guide_product_id"], "product")
@@ -776,6 +794,12 @@ def register_funnel(app):
                     "code": obj["data"]["snapshot"]["consultation_code"],
                     "amount_rub": obj["data"]["snapshot"]["consultation_amount_rub"],
                     "regular_amount_rub": obj["data"]["snapshot"]["consultation_regular_rub"],
+                    "terms": obj["data"]["snapshot"].get(
+                        "consultation_promo_terms", obj["data"]["snapshot"]["consultation_text"]
+                    ),
+                    "source": copy.deepcopy(
+                        obj["data"]["snapshot"].get("consultation_promo_source", {})
+                    ),
                     "eligible": bool(
                         obj["data"].get("guide_delivered_at")
                         and not obj["data"].get("dev_tripwire_accepted_at")
@@ -1620,19 +1644,30 @@ def notify_funnel(app, owner, id, event):
                 blob["body"],
                 "application/pdf",
             )
+            acknowledged_at = int(app.config["CLOCK"]())
             with transaction(app.config["DATABASE"]) as db:
                 current = object_get(db, id)
-                update(db, current, now, {**current["data"], "guide_file_sent_at": now})
+                update(
+                    db,
+                    current,
+                    acknowledged_at,
+                    {**current["data"], "guide_file_sent_at": acknowledged_at},
+                )
         with transaction(app.config["DATABASE"]) as db:
             current = object_get(db, id)
+            if current["data"].get("guide_delivered_at"):
+                return
+            delivered_at = current["data"]["guide_file_sent_at"]
+            completed_at = int(app.config["CLOCK"]())
             current = update(
                 db,
                 current,
-                now,
+                completed_at,
                 {
                     **current["data"],
-                    "guide_delivered_at": now,
-                    "consultation_expires": now + snapshot["consultation_valid_days"] * 86400,
+                    "guide_delivered_at": delivered_at,
+                    "consultation_expires": delivered_at
+                    + snapshot["consultation_valid_days"] * 86400,
                 },
             )
             if not current["data"].get("notifications_stopped") and not current["data"].get(
@@ -1640,12 +1675,15 @@ def notify_funnel(app, owner, id, event):
             ):
                 for f in snapshot["followups"]:
                     schedule(
-                        db, current, "funnel.followup." + str(f["hours"]), now + f["hours"] * 3600
+                        db,
+                        current,
+                        "funnel.followup." + str(f["hours"]),
+                        delivered_at + f["hours"] * 3600,
                     )
     elif event.startswith("funnel.followup"):
         hours = int(event.rsplit(".", 1)[-1])
         # Do not send obsolete countdowns after downtime.
-        if now > d["consultation_expires"] + 300 or (
+        if now >= d["consultation_expires"] or (
             hours < 72 and now >= d["guide_delivered_at"] + (hours + 24) * 3600
         ):
             return
