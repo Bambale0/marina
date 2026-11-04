@@ -158,6 +158,7 @@ const heading = (title, sub) =>
   );
 const empty = (text) => el("div", { class: "empty" }, text);
 const key = () => crypto.randomUUID();
+const money = (amount, currency) => currency === "RUB" ? (amount / 100).toFixed(2) + " ₽" : amount + " " + currency;
 function field(label, type = "text", value = "") {
   const input = el(
     type === "textarea" ? "textarea" : "input",
@@ -563,7 +564,7 @@ async function shop(service, subject, extra = {}) {
   const products = (await api("/catalog/product")).items.filter(
     (p) =>
       p.data.service === service &&
-      p.data.currency === "XTR" &&
+      p.data.currency === "RUB" && p.data.web_sales_approved === true &&
       (!extra.course_id || p.data.course_id === extra.course_id),
   );
   const pick = subjectPicker();
@@ -584,7 +585,7 @@ async function shop(service, subject, extra = {}) {
               { class: "card" },
               el("h2", {}, p.data.title),
               el("p", {}, p.data.terms),
-              el("h3", {}, p.data.amount + " Stars"),
+              el("h3", {}, (p.data.amount / 100).toFixed(2) + " ₽"),
               button(
                 service === "case" && !extra.case_id
                   ? "Подготовить комплект"
@@ -614,6 +615,7 @@ async function shop(service, subject, extra = {}) {
   );
 }
 async function quoteView(q) {
+  const email = field("Email для электронного чека Lava.top", "email");
   main(
     heading("Проверьте условия покупки"),
     el(
@@ -628,9 +630,7 @@ async function quoteView(q) {
           (me.subjects.find((s) => s.id === l.subject_id)?.data.name ||
             l.subject_id) +
             " · " +
-            l.amount +
-            " " +
-            q.data.currency +
+            money(l.amount, q.data.currency) +
             " · скидка " +
             l.discount +
             "%" +
@@ -639,18 +639,19 @@ async function quoteView(q) {
               : ""),
         ),
       ),
-      el("h2", {}, "Итого: " + q.data.total + " " + q.data.currency),
+      el("h2", {}, "Итого: " + money(q.data.total, q.data.currency)),
       el(
         "p",
         { class: "quiet" },
         "Предложение действует до " + dateTime(q.data.expires),
       ),
+      ...(me.account.role === "admin" ? [] : [email.node]),
       button("Перейти к оплате", async () => {
         const order = await api("/orders", "POST", {
           quote_id: q.id,
           key: key(),
         });
-        await api("/orders/" + order.id + "/checkout", "POST", {});
+        await api("/orders/" + order.id + "/checkout", "POST", {email: email.get()});
         notice("Счёт создаётся. Он появится в разделе «Мои обращения».");
         await history();
       }),
@@ -1064,10 +1065,10 @@ async function clientCard(o) {
   }
   if (o.kind === "order") {
     card.append(
-      el("h2", {}, d.total + " " + d.currency),
+      el("h2", {}, money(d.total, d.currency)),
       el("p", {}, d.product_snapshot.title),
     );
-    if (o.status === "pending") {
+    if (o.status === "pending" && d.provider === "lava") {
       const attempts = (await api("/history")).items.filter(
         (a) => a.kind === "payment_attempt" && a.data.order_id === o.id,
       );
@@ -1075,17 +1076,17 @@ async function clientCard(o) {
       if (a?.data.url)
         card.append(
           button("Оплатить", () => {
-            if (window.Telegram?.WebApp?.initData && d.provider === "stars")
-              Telegram.WebApp.openInvoice(a.data.url, () => safe(history));
-            else window.open(a.data.url, "_blank", "noopener");
+            window.open(a.data.url, "_blank", "noopener");
           }),
         );
-      else
+      else {
+        const email = field("Email для электронного чека Lava.top", "email");
+        if (me.account.role !== "admin") card.append(email.node);
         card.append(
           button(
             "Проверить счёт",
             async () => {
-              await api("/orders/" + o.id + "/checkout", "POST", {});
+              await api("/orders/" + o.id + "/checkout", "POST", {email: email.get()});
               notice(
                 "Счёт обрабатывается. Обновите карточку через несколько секунд.",
               );
@@ -1094,6 +1095,7 @@ async function clientCard(o) {
             true,
           ),
         );
+      }
     }
   }
   main(card);

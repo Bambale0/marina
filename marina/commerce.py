@@ -9,6 +9,13 @@ from .db import audit, connect, emit, insert, transaction, uid, unpack, update
 from .screening import idempotent
 
 
+def provider_enabled(app, provider):
+    """Availability for new invoices; historical events remain processable."""
+    return provider in ("lava", "stars") and provider in app.config.get(
+        "ENABLED_PAYMENT_PROVIDERS", ["lava"]
+    )
+
+
 def policies(db, type, scope=None):
     rows = db.execute(
         "SELECT * FROM objects WHERE kind='policy' AND status='published' ORDER BY created DESC,rowid DESC"
@@ -474,20 +481,19 @@ def register_commerce(app):
             ).fetchone()[0]
             require(count < ops["data"]["max_open_orders"], "Лимит заказов достигнут")
         product = p["data"]
+        provider = "stars" if product["currency"] == "XTR" else "lava"
+        require(provider_enabled(app, provider), "Этот способ оплаты отключён")
         if product["service"] == "guide":
-            from .funnel import guide_quote
+            from .funnel import guide_quote, lava_guide_ready
 
-            return guide_quote(g.db, g.actor["id"], p, d, g.now), 201
+            return guide_quote(
+                g.db, g.actor["id"], p, d, g.now, allow_external_lava=lava_guide_ready(app, p)
+            ), 201
         surface = d.get("surface")
         require(surface in ("telegram", "web"), "Укажите поверхность покупки")
         require(
             g.actor["role"] == "admin"
-            or not (surface == "telegram" and product["currency"] != "XTR"),
-            "Цифровые покупки в Telegram доступны через Stars",
-        )
-        require(
-            g.actor["role"] == "admin"
-            or surface != "web"
+            or (surface != "web" and provider != "lava")
             or product.get("web_sales_approved") is True,
             "Веб-продажи пока не согласованы",
         )
@@ -662,6 +668,10 @@ def register_commerce(app):
         q = object_get(g.db, d.get("quote_id"), "quote", g.actor["id"])
 
         def create():
+            require(
+                provider_enabled(app, q["data"].get("provider")),
+                "Этот способ оплаты отключён",
+            )
             require(q["data"]["expires"] > g.now, "Расчёт истёк, обновите цену")
             require(
                 not g.db.execute(
@@ -887,6 +897,9 @@ def register_commerce(app):
                 )
                 ok = bool(
                     o
+                    and provider_enabled(app, "stars")
+                    and o["data"].get("provider") == "stars"
+                    and o["data"].get("currency") == "XTR"
                     and expected == p.get("from", {}).get("id")
                     and o["status"] == "pending"
                     and checkout_open(db, o, g.now)

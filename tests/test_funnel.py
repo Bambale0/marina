@@ -581,7 +581,7 @@ def test_lava_adjustment_webhook_preserves_envelope_once(app):
     assert "refund.success" in rows[0]["data"]
 
 
-def test_external_lava_tripwire_is_disabled_without_explicit_dev_gate(app):
+def test_lava_tripwire_is_disabled_when_provider_is_disabled(app):
     app.config.update(
         DEV_EXTERNAL_LAVA_CHECKOUT=True,
         LAVA_API_KEY="test-api-key",
@@ -594,10 +594,10 @@ def test_external_lava_tripwire_is_disabled_without_explicit_dev_gate(app):
         lava_offer_id="836b9fc5-7ae9-4a27-9642-592bc44072b7",
         web_sales_approved=True,
     )
-    app.config["DEV_EXTERNAL_LAVA_CHECKOUT"] = False
+    app.config["ENABLED_PAYMENT_PROVIDERS"] = ["stars"]
     response = owner.post(f"/api/funnel-runs/{run['id']}/purchase", json={})
-    assert response.status_code == 422
-    assert "не разрешена" in response.json["error"]
+    assert response.status_code == 403
+    assert "отключён" in response.json["error"]
 
 
 def test_incomplete_lava_setup_does_not_create_tripwire_order(app):
@@ -679,7 +679,7 @@ def test_admin_renders_text_material_and_lists_tripwire_entities(app):
         "lava_api": False,
         "lava_webhook": False,
         "public_https": False,
-        "external_lava_test_mode": False,
+        "lava_checkout_enabled": False,
         "tripwire_payment_bypass": False,
     }
     assert dashboard.json["entities"]["material"]["draft"] == 1
@@ -1209,16 +1209,17 @@ def test_result_removes_consultation_buttons_but_keeps_configured_paths(app):
         json={"revision": base["revision"], "reason": "Synthetic free PDF"},
     ).json
     material = approve_existing(admin, material)
-    scenario(admin, free_material_id=material["id"])
+    scenario(admin, free_material_id=material["id"], channel_url="https://t.me/synthetic")
     sent, files = capture(app)
     green = finish(owner, start(owner), ["a"] * 6)
     drain(app)
     app.clock[0] += 30
     drain(app)
-    assert "Игры по возрасту" in str(sent[-1])
+    assert "Игры по возрасту" not in str(sent[-1])
+    assert "Полезные материалы" in str(sent[-1])
     assert "О диагностике" not in str(sent[-1])
     assert "Написать Марине" not in str(sent[-1])
-    assert owner.get(f"/api/funnel-runs/{green['id']}/free-pdf").data.startswith(b"%PDF")
+    assert owner.get(f"/api/funnel-runs/{green['id']}/free-pdf").status_code == 403
     red = finish(owner, start(owner, key="red"), ["c"] * 6)
     drain(app)
     app.clock[0] += 30
@@ -1253,7 +1254,7 @@ def test_result_removes_consultation_buttons_but_keeps_configured_paths(app):
     )
 
 
-def test_refusal_can_deliver_the_configured_free_video(app, tmp_path):
+def test_refusal_never_delivers_a_legacy_video(app, tmp_path):
     import io
     from tests.test_crm import make_video
 
@@ -1287,8 +1288,12 @@ def test_refusal_can_deliver_the_configured_free_video(app, tmp_path):
     assert owner.post(f"/api/funnel-runs/{run['id']}/refuse", json={}).status_code == 200
     app.clock[0] += 4 * 86400
     drain(app)
-    assert len(files) == 1
-    assert files[0][2] == raw and files[0][4] == "sendVideo"
+    assert not files
+    with connect(app.config["DATABASE"]) as db:
+        assert not db.execute(
+            "SELECT 1 FROM outbox WHERE object_id=? AND event='funnel.refusal'",
+            (run["id"],),
+        ).fetchone()
 
 
 def test_default_tripwire_delay_is_three_minutes(app):

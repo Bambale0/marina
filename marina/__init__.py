@@ -132,8 +132,12 @@ def create_app(config=None):
         SESSION_TTL=12 * 3600,
         PUBLIC_URL=os.getenv("PUBLIC_URL", ""),
         TELEGRAM_WEBHOOK_SECRET=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
+        ENABLED_PAYMENT_PROVIDERS=[
+            value.strip().lower()
+            for value in os.getenv("ENABLED_PAYMENT_PROVIDERS", "lava").split(",")
+            if value.strip()
+        ],
         DEV_OFFER_BYPASSES_CONSENT=os.getenv("DEV_OFFER_BYPASSES_CONSENT") == "1",
-        DEV_EXTERNAL_LAVA_CHECKOUT=os.getenv("DEV_EXTERNAL_LAVA_CHECKOUT") == "1",
         DEV_TRIPWIRE_BYPASS_PAYMENT=os.getenv("DEV_TRIPWIRE_BYPASS_PAYMENT") == "1",
         SALES_ENABLED=False,
     )

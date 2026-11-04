@@ -145,7 +145,6 @@ def test_rejects_invalid_pdf_or_blob(gate, fault):
 @pytest.mark.parametrize(
     "field,value,error",
     [
-        ("free_material_id", "", "free_material_missing"),
         ("refusal_material_id", "", "refusal_material_missing"),
         ("contact_url", "", "contact_links"),
         ("followups", [{"hours": 24, "text": ""}], "followups"),
@@ -153,7 +152,7 @@ def test_rejects_invalid_pdf_or_blob(gate, fault):
 )
 def test_missing_required_configuration(gate, field, value, error):
     db, run, _ = gate
-    change(db, "f3-4", **{field: value})
+    change(db, "f7-9", **{field: value})
     code, report = run()
     assert code == 1
     assert any(error in item for item in report["errors"])
@@ -223,9 +222,7 @@ def test_price_must_be_positive_integer(gate, amount):
     assert run()[0] == 1
 
 
-@pytest.mark.parametrize(
-    "kind", ["service", "material_unpublished", "free_missing_blob", "refusal_missing_blob"]
-)
+@pytest.mark.parametrize("kind", ["service", "material_unpublished", "refusal_missing_blob"])
 def test_invalid_material_and_service_links(gate, kind):
     db, run, _ = gate
     if kind == "service":
@@ -234,8 +231,25 @@ def test_invalid_material_and_service_links(gate, kind):
         db.execute("UPDATE objects SET status='draft' WHERE id='m3-4'")
     else:
         field = "free_material_id" if kind.startswith("free") else "refusal_material_id"
-        change(db, "f3-4", **{field: "missing"})
+        change(db, "f7-9", **{field: "missing"})
     assert run()[0] == 1
+
+
+def test_result_stage_requires_no_free_pdf(gate):
+    db, run, _ = gate
+    for group in ("3-4", "5-6", "7-9", "10-14"):
+        change(db, "f" + group, free_material_id="")
+    assert run()[0] == 0
+
+
+@pytest.mark.parametrize("providers", ["", " ", "lava,stars"])
+def test_gate_rejects_other_enabled_providers(gate, providers):
+    _, run, envfile = gate
+    with envfile.open("a") as stream:
+        stream.write("ENABLED_PAYMENT_PROVIDERS=" + providers + "\n")
+    code, report = run()
+    assert code == 1
+    assert "payment_provider_not_lava_only" in report["errors"]
 
 
 def test_configurable_pdf_page_count(gate):
@@ -263,9 +277,9 @@ def test_optional_environment_reports_unknowns_without_certification(gate):
     assert "environment_flag_unknown:DEV_OFFER_BYPASSES_CONSENT" in report["warnings"]
 
 
-def test_optional_preschool_refusal_material_is_only_a_warning(gate):
+def test_optional_preschool_refusal_material_is_not_a_blocker(gate):
     db, run, _ = gate
     change(db, "f5-6", refusal_material_id="")
     code, report = run()
     assert code == 0
-    assert "5-6:refusal_material_missing" in report["warnings"]
+    assert not report["warnings"]

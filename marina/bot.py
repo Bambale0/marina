@@ -398,7 +398,7 @@ class Bot:
             "Трипваер",
             "Lava API: " + yes(data["integrations"]["lava_api"]),
             "Lava webhook: " + yes(data["integrations"]["lava_webhook"]),
-            "Dev-оплата: " + yes(data["integrations"]["external_lava_test_mode"]),
+            "Оплата только через Lava.top: " + yes(data["integrations"]["lava_checkout_enabled"]),
             "Оферта: " + (data["offer"]["title"] if data.get("offer") else "не опубликована"),
             "Правила покупки: "
             + (data["policy"]["title"] if data.get("policy") else "не опубликованы"),
@@ -1228,11 +1228,14 @@ class Bot:
             )
             self.action("course", {"id": d["course"]})
         elif action == "products":
+            from .funnel import price_text
+
             items = [
                 p
                 for p in self.api("/catalog/product")["items"]
                 if p["data"]["service"] == d["service"]
-                and p["data"]["currency"] == "XTR"
+                and p["data"]["currency"] == "RUB"
+                and p["data"].get("web_sales_approved") is True
                 and (not d.get("course_id") or p["data"].get("course_id") == d["course_id"])
             ]
             self.send(
@@ -1241,7 +1244,7 @@ class Bot:
                 else "Продажи пока не открыты. Условия и материалы готовятся.",
                 [
                     (
-                        p["data"]["title"] + " · " + str(p["data"]["amount"]) + " Stars",
+                        p["data"]["title"] + " · " + price_text(p),
                         "case_prepare"
                         if d["service"] == "case" and not d.get("case_id")
                         else "quote",
@@ -1272,6 +1275,8 @@ class Bot:
                 )
                 self.action("case_submit", {"id": case["id"]})
         elif action == "quote":
+            from .funnel import price_text
+
             s = self.selected()
             if not s:
                 return
@@ -1290,8 +1295,9 @@ class Bot:
                 + "\n\n"
                 + q["data"]["product_snapshot"]["terms"]
                 + "\n\nИтого: "
-                + str(q["data"]["total"])
-                + " Stars"
+                + price_text(
+                    {"data": {"amount": q["data"]["total"], "currency": q["data"]["currency"]}}
+                )
             )
             self.send(text, [("Подтвердить и оплатить", "buy", {"id": q["id"]})])
         elif action == "buy":
@@ -1301,19 +1307,9 @@ class Bot:
             if order["status"] == "paid":
                 self.send("Доступ открыт.", MENU)
                 return
-            p = order["data"]
-            telegram(
-                self.app,
-                "sendInvoice",
-                {
-                    "chat_id": self.chat,
-                    "title": p["product_snapshot"]["title"][:32],
-                    "description": p["product_snapshot"]["terms"][:255],
-                    "payload": order["id"],
-                    "provider_token": "",
-                    "currency": "XTR",
-                    "prices": [{"label": "Услуга", "amount": p["total"]}],
-                },
+            self.state_set(step="funnel_checkout_email", funnel_order_id=order["id"])
+            self.send(
+                "Укажите email для электронного чека Lava.top. Он используется только для оформления платежа."
             )
         elif action == "card":
             self.card(d["id"], d["kind"])

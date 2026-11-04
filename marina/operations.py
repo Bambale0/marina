@@ -52,6 +52,31 @@ def notify(app, owner, object_id, event):
 
     with connect(app.config["DATABASE"]) as db:
         account = db.execute("SELECT telegram_id FROM accounts WHERE id=?", (owner,)).fetchone()
+    if event == "invoice.ready":
+        from .commerce import checkout_open, provider_enabled
+
+        with connect(app.config["DATABASE"]) as db:
+            attempt = object_get(db, object_id, "payment_attempt", owner)
+            order = object_get(db, attempt["data"]["order_id"], "order", owner)
+            if (
+                attempt["status"] != "ready"
+                or not provider_enabled(app, attempt["data"]["provider"])
+                or not checkout_open(db, order, int(app.config["CLOCK"]()))
+            ):
+                return
+        require(account, "Получатель не найден")
+        telegram(
+            app,
+            "sendMessage",
+            {
+                "chat_id": account["telegram_id"],
+                "text": "Счёт готов. Оплатите на защищённой странице Lava.top:",
+                "reply_markup": {
+                    "inline_keyboard": [[{"text": "💳 Оплатить", "url": attempt["data"]["url"]}]]
+                },
+            },
+        )
+        return
     if event.startswith("sla.") or event in (
         "case.submitted",
         "case.followup",
@@ -129,11 +154,14 @@ def work_once(app, send=None):
             "refund.create",
         )
         if event["event"] == "invoice.create" and event["status"] == "pending":
-            from .commerce import checkout_open
+            from .commerce import checkout_open, provider_enabled
 
             attempt = object_get(db, event["object_id"], "payment_attempt")
             order = object_get(db, attempt["data"]["order_id"], "order")
-            if attempt["status"] == "queued" and not checkout_open(db, order, now):
+            if attempt["status"] == "queued" and (
+                not checkout_open(db, order, now)
+                or not provider_enabled(app, attempt["data"]["provider"])
+            ):
                 update(db, attempt, now, status="cancelled")
                 db.execute(
                     "UPDATE outbox SET status='cancelled',leased_until=NULL WHERE id=?",
@@ -204,6 +232,8 @@ def work_once(app, send=None):
 
                     run = object_get(db, order["data"]["run_id"], "funnel_run")
                     schedule(db, run, "funnel.invoice." + attempt["id"], now)
+                elif attempt["data"]["provider"] == "lava":
+                    emit(db, attempt["owner"], attempt["id"], "invoice.ready", now)
             state = "sent" if outcome == "sent" else "failed"
             if outcome == "failed":
                 insert(

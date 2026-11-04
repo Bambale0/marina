@@ -182,7 +182,7 @@ def test_followup_uses_configured_booking_action_and_actual_price(app):
     assert data["action"] == "funnel_book"
 
 
-def test_free_pdf_remains_available_after_material_superseded(app):
+def test_screening_result_does_not_grant_free_pdf_from_legacy_configuration(app):
     admin, owner = login(app), login(app, 2)
     base = scenario(admin)
     material = admin.post(
@@ -193,14 +193,16 @@ def test_free_pdf_remains_available_after_material_superseded(app):
     scenario(admin, free_material_id=material["id"])
     run = finish(owner, start(owner), ["a"] * 6)
     before = owner.get(f"/api/funnel-runs/{run['id']}/free-pdf")
-    assert before.status_code == 200
+    assert before.status_code == 403
+    resumed = owner.post(f"/api/funnel-runs/{run['id']}/resume", json={}).json
+    assert all(action != "funnel_free" for _, action, _ in resumed["data"]["result_buttons"])
     response = admin.post(
         f"/api/admin/content/{material['id']}/archive",
         json={"revision": material["revision"], "reason": "Superseded, existing access retained"},
     )
     assert response.status_code == 200
     after = owner.get(f"/api/funnel-runs/{run['id']}/free-pdf")
-    assert after.status_code == 200 and after.data == before.data
+    assert after.status_code == 403
 
 
 @pytest.mark.parametrize("verification", ["pending", "unknown"])
