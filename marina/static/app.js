@@ -43,6 +43,7 @@ const states = {
   paid: "Оплачено",
   submitted: "У специалиста",
   in_progress: "В работе",
+  delivery_pending: "Ожидает доставки",
   answered: "Ответ готов",
   followup_pending: "Принято уточнение",
   closed: "Завершено",
@@ -61,6 +62,7 @@ const kinds = {
   video_review: "Видео и диагностика",
   video_task: "Видеоразбор выполнения задания",
   consultation_lead: "Обращение специалисту",
+  consultation_result: "Персональный результат консультации",
   plan: "Будущий комплекс",
   media: "Медиафайл",
   retention_task: "Срок хранения файла",
@@ -1038,6 +1040,9 @@ async function clientCard(o) {
       );
   }
   if(o.kind==="video_task") {
+    card.append(el("p", {}, d.manual_payment?.status === "confirmed"
+      ? "Оплата подтверждена специалистом: " + d.manual_payment.amount_rub + " ₽"
+      : "Оплата не подтверждена. Уточнить оплату можно у специалиста."));
     card.append(el("p",{class:"readable"},d.recommendations || d.assignment || "Специалист подготовит задание. Оно придёт в Telegram."));
     if(o.status==="awaiting_videos") {
       const uploaded=new Set(d.videos.map(v=>v.slot));
@@ -1062,8 +1067,29 @@ async function clientCard(o) {
     },true));
   }
   if(o.kind==="consultation_lead") card.append(el("p",{},d.label),el("p",{},"Запрос передан специалисту."));
+  if (o.kind === "consultation_result") {
+    card.append(el("h2", {}, d.title));
+    if (d.due_at != null)
+      card.append(el("p", {}, "Срок отправки: " + dateTime(d.due_at)));
+    if (["delivery_pending", "completed"].includes(o.status)) {
+      card.append(button("Скачать персональный PDF", async () => {
+        const url = await authenticatedFile("/consultation-results/" + o.id + "/pdf");
+        el("a", {href: url, download: d.filename}).click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      }));
+      card.append(el("p", {}, d.delivered_at != null
+        ? "Отправлен в Telegram: " + dateTime(d.delivered_at)
+        : "Результат опубликован. Отправка в Telegram ожидает завершения."));
+    } else {
+      card.append(el("p", {}, "Специалист готовит ваш письменный результат."));
+    }
+  }
   if (o.kind === "booking") {
     card.append(el("p", {}, d.topic));
+    if (d.result_id)
+      card.append(button("Персональный результат", async () => {
+        await clientCard(await api("/consultation-results/" + d.result_id));
+      }, true));
     if(d.paid_at != null && d.payment_timing==="before_scheduling" && o.status!=="cancelled")
       card.append(button("Скачать памятку подготовки",async()=>{
         const url=await authenticatedFile("/bookings/"+o.id+"/preparation");
@@ -1092,6 +1118,11 @@ async function clientCard(o) {
           true,
         ),
       );
+    if (o.status === "confirmed")
+      card.append(button("Перенести встречу", async () => {
+        await api("/bookings/" + o.id + "/reschedule", "POST", {});
+        await history();
+      }, true));
     if (d.connection)
       card.append(
         el(

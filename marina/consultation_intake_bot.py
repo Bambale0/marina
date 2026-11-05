@@ -5,6 +5,48 @@ from .consultation_journey import contact_url, button_text, display_price
 from .db import uid
 
 
+def deliver_route_material(bot, route):
+    """Attach a ready route PDF after consent, retaining acknowledged delivery on retry."""
+    from .bot import send_file
+    from .commerce import policies
+    from .consultation_delivery import send_once
+    from .consultation_journey import material_ready
+    from .db import connect
+
+    with connect(bot.app.config["DATABASE"]) as db:
+        policy = policies(db, "consultation_routes")
+        material = policy["data"]["routes"].get(route, {}) if policy else {}
+        if not material_ready(db, material.get("material_id")):
+            return
+    choice = {"route": route, "action": "download"}
+    if not bot.privacy_gate("outside_interest", choice):
+        return
+    lead = bot.api(
+        "/consultation-leads",
+        "POST",
+        {**choice, "key": "bot-route-material:" + policy["id"] + ":" + route},
+    )
+    response = bot.client.get("/api/consultation-leads/" + lead["id"] + "/pdf")
+    require(
+        response.status_code == 200,
+        (response.json or {}).get("error", "Материал недоступен"),
+    )
+    route_snapshot = lead["data"]["route_snapshot"]
+    marker = "outside-material:" + lead["id"]
+    send_once(
+        bot.app,
+        marker + ":file",
+        lambda: send_file(
+            bot.app,
+            bot.chat,
+            route_snapshot["material_filename"],
+            response.data,
+            "application/pdf",
+        ),
+    )
+    send_once(bot.app, marker + ":text", lambda: bot.send(route_snapshot["gift_text"]))
+
+
 def show_question(bot):
     draft = bot.state["data"]["consultation_intake"]
     q = draft["journey"]["questions"][len(draft["answers"])]
@@ -142,7 +184,9 @@ def handle_action(bot, action, d):
                 ("⬅️ Другой возраст", "outside_menu", {}),
             ],
         )
-        if r.get("material_id"):
+        if d["route"] == "baby_0_2":
+            deliver_route_material(bot, d["route"])
+        elif r.get("material_id"):
             bot.send(
                 r["gift_text"],
                 [
@@ -154,25 +198,13 @@ def handle_action(bot, action, d):
                 ],
             )
     elif action == "outside_interest":
+        if d["action"] == "download":
+            deliver_route_material(bot, d["route"])
+            return True
         if not bot.privacy_gate("outside_interest", d):
             return True
         lead = bot.api("/consultation-leads", "POST", {**d, "key": "bot:" + bot.update_id})
-        if d["action"] == "download":
-            from .bot import send_file
-
-            response = bot.client.get("/api/consultation-leads/" + lead["id"] + "/pdf")
-            require(
-                response.status_code == 200,
-                (response.json or {}).get("error", "Материал недоступен"),
-            )
-            send_file(
-                bot.app,
-                bot.chat,
-                lead["data"]["route_snapshot"]["material_filename"],
-                response.data,
-                "application/pdf",
-            )
-        elif d["route"] == "baby_0_2" and d["action"] == "booking":
+        if d["route"] == "baby_0_2" and d["action"] == "booking":
             task = bot.api("/video-tasks", "POST", {"lead_id": lead["id"]})
             bot.send(
                 "Заявка на видеоразбор передана специалисту. Специалист даст задание; снимите его выполнение ребёнком. После просмотра вы получите коррекцию выполнения и рекомендации.",

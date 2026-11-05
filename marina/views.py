@@ -10,6 +10,25 @@ def client_view(obj):
         from .funnel import public_run
 
         return public_run(obj)
+    if kind == "consultation_result":
+        obj["data"] = {
+            key: value
+            for key, value in d.items()
+            if key
+            in (
+                "booking_id",
+                "title",
+                "filename",
+                "result_delivery",
+                "completed_at",
+                "due_at",
+                "answer_attachments",
+                "published_at",
+                "delivered_at",
+                "delivery_channel",
+            )
+        }
+        return obj
     if kind == "video_task":
         obj["data"] = {
             k: v
@@ -30,6 +49,13 @@ def client_view(obj):
             )
         }
         obj["data"]["videos"] = [{"slot": v["slot"]} for v in d.get("videos", [])]
+        payment = d.get("manual_payment") or {}
+        confirmed = payment.get("status") == "confirmed"
+        obj["data"]["manual_payment"] = {
+            "status": "confirmed" if confirmed else "unknown",
+            "amount_rub": d.get("amount_rub"),
+            "confirmed_at": payment.get("confirmed_at") if confirmed else None,
+        }
         return obj
     if kind == "video_review":
         from .crm import client_review

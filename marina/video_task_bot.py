@@ -16,6 +16,12 @@ def show_task(bot, id):
         or d.get("assignment")
         or "Специалист подготовит задание. Оно придёт в этот чат. Не нужно заранее снимать случайные видео."
     )
+    payment = d.get("manual_payment", {})
+    text += "\n\n" + (
+        "Оплата подтверждена специалистом"
+        if payment.get("status") == "confirmed"
+        else "Оплата не подтверждена"
+    )
     if task["status"] == "closed":
         text += "\n\nВидеоразбор закрыт. Для продолжения свяжитесь со специалистом."
     if task["status"] == "awaiting_videos":
@@ -40,6 +46,8 @@ def show_task(bot, id):
             buttons.append(("Отправить специалисту на разбор", "video_task_submit", {"id": id}))
     elif task["status"] == "submitted":
         text += "\n\nВидео отправлены на разбор. Коррекция и рекомендации придут в этот чат."
+    if task["status"] == "completed" and d.get("answer_attachments"):
+        buttons.append(("Скачать материалы разбора", "video_task_answer_download", {"id": id}))
     bot.send(text, buttons + [("В меню", "menu", {})])
 
 

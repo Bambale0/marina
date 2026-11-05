@@ -59,6 +59,7 @@ ADMIN_KIND_LABELS = {
     "video_review": "Видеоразборы",
     "video_task": "Задания с видео",
     "consultation_lead": "Другой возраст",
+    "consultation_result": "Персональные результаты консультаций",
 }
 
 RELATED_OBJECT_KEYS = {
@@ -852,8 +853,12 @@ class Bot:
         from .consultation_bot import handle_action as handle_consultation
         from .consultation_intake_bot import handle_action as handle_intake
         from .video_task_bot import handle_action as handle_video_task
+        from .specialist_result_bot import handle_action as handle_specialist_result
         from .funnel_bot import handle_action
 
+        # Publication reads its pending draft before generic navigation clears admin prompts.
+        if handle_specialist_result(self, action, d):
+            return
         if action.startswith("admin_") or action in ("menu", "queue"):
             self.cancel_admin_prompt()
         if handle_video_task(self, action, d) or handle_intake(self, action, d):
@@ -1245,6 +1250,8 @@ class Bot:
                 self.state_set(step="booking_topic", crm_review_id=None)
                 self.send("Кратко опишите, что хотите обсудить на встрече.")
         elif action == "history":
+            from .specialist_result_bot import RESULT_STATES
+
             items = self.api("/history")["items"]
             items = [
                 o
@@ -1253,6 +1260,7 @@ class Bot:
                 in (
                     "video_review",
                     "video_task",
+                    "consultation_result",
                     "report",
                     "case",
                     "booking",
@@ -1266,7 +1274,17 @@ class Bot:
                 "Ваши обращения и результаты." if items else "Пока нет обращений.",
                 [
                     (
-                        o["kind"] + " · " + o["status"],
+                        (
+                            "Персональный результат"
+                            if o["kind"] == "consultation_result"
+                            else o["kind"]
+                        )
+                        + " · "
+                        + (
+                            RESULT_STATES.get(o["status"], o["status"])
+                            if o["kind"] == "consultation_result"
+                            else o["status"]
+                        ),
                         "card",
                         {"id": o["id"], "kind": o["kind"]},
                     )
@@ -1816,9 +1834,18 @@ class Bot:
                 },
             )
             if d["form"] == "booking":
+                minutes = current["data"].get("journey_snapshot", {}).get("session_minutes", 60)
                 self.send(
-                    "Отправьте JSON: "
-                    '{"starts":1893456000,"duration_minutes":60,"timezone":"Europe/Moscow"}'
+                    "Продолжительность по сценарию: "
+                    + str(minutes)
+                    + " минут. Можно указать другую согласованную длительность.\nОтправьте JSON: "
+                    + json.dumps(
+                        {
+                            "starts": 1893456000,
+                            "duration_minutes": minutes,
+                            "timezone": "Europe/Moscow",
+                        }
+                    )
                 )
             elif d["form"] == "provider_id":
                 self.send("Введите ID внешнего счёта Lava.top.")
@@ -1934,6 +1961,10 @@ class Bot:
         )
 
     def card(self, id, kind):
+        if kind == "consultation_result":
+            from .specialist_result_bot import show_result
+
+            return show_result(self, id)
         if kind == "video_task":
             from .video_task_bot import show_task
 
@@ -2002,6 +2033,16 @@ class Bot:
                 ]
             if d.get("connection"):
                 text += "\nСсылка встречи: " + d["connection"]
+            if obj["status"] in ("proposed", "confirmed"):
+                buttons.append(("Перенести встречу", "crm_reschedule", {"id": id}))
+            if d.get("result_id"):
+                buttons.append(
+                    (
+                        "Открыть персональный результат",
+                        "consultation_result_open",
+                        {"id": d["result_id"]},
+                    )
+                )
             self.send(text, buttons)
             if (
                 d.get("paid_at") is not None
@@ -2034,6 +2075,10 @@ class Bot:
         card = self.api("/admin/objects/" + id)
         o = card["object"]
         d = o["data"]
+        if o["kind"] == "consultation_result":
+            from .specialist_result_bot import admin_result_card
+
+            return admin_result_card(self, o)
         buttons = []
         if o["kind"] == "subject":
             buttons = [
@@ -2093,9 +2138,9 @@ class Bot:
                 if o["status"] == "submitted":
                     buttons.append(
                         (
-                            "Отправить коррекцию и рекомендации",
-                            "admin_text",
-                            {"id": id, "command": "video-tasks/recommendations"},
+                            "Подготовить аудиоразбор",
+                            "admin_specialist_audio_start",
+                            {"id": id},
                         )
                     )
             if o["status"] in ("requested", "awaiting_videos", "submitted"):
@@ -2106,6 +2151,8 @@ class Bot:
                         {"id": id, "route": "video-tasks", "command": "close"},
                     )
                 )
+            if d.get("manual_payment", {}).get("status") != "confirmed":
+                buttons.append(("Подтвердить оплату", "admin_video_payment_start", {"id": id}))
         elif o["kind"] == "video_review":
             buttons = [
                 (
@@ -2171,6 +2218,23 @@ class Bot:
                     {"id": id, "route": "bookings", "command": "cancel"},
                 ),
             ]
+            if d.get("result_id"):
+                buttons.append(
+                    ("Открыть персональный результат", "admin_card", {"id": d["result_id"]})
+                )
+            if (
+                d.get("paid_at") is not None
+                and d.get("contact_due_at") is not None
+                and d.get("contacted_at") is None
+                and o["status"] != "cancelled"
+            ):
+                buttons.append(
+                    (
+                        "Связалась с родителем",
+                        "admin_command",
+                        {"id": id, "route": "bookings", "command": "contacted"},
+                    )
+                )
         elif o["kind"] == "reconciliation":
             buttons = [
                 (
@@ -2427,6 +2491,10 @@ class Bot:
                 [("Открыть админку", "admin_menu", {})],
             )
         step = self.state["data"].get("step")
+        from .specialist_result_bot import handle_message as handle_specialist_message
+
+        if handle_specialist_message(self, message):
+            return
         if step == "admin_account_search":
             self.require_admin()
             require(1 <= len(text) <= 100, "Введите имя или ID до 100 символов")
@@ -3155,7 +3223,9 @@ def send_file(app, chat, filename, content, mime, method="sendDocument"):
     if app.config.get("FILE_TRANSPORT"):
         return app.config["FILE_TRANSPORT"](chat, filename, content, mime, method)
     boundary = secrets.token_hex(24)
-    field = "video" if method == "sendVideo" else "document"
+    field = {"sendVideo": "video", "sendAudio": "audio", "sendVoice": "voice"}.get(
+        method, "document"
+    )
     data = (
         (
             f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat}\r\n--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{filename}"\r\nContent-Type: {mime}\r\n\r\n'

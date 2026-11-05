@@ -534,9 +534,13 @@ def create_app(config=None):
 
     register_consultation_commerce(app)
     from .consultation_journey import register_consultation_journey
+    from .consultation_contact import register_consultation_contact
+    from .consultation_results import register_consultation_results
     from .video_tasks import register_video_tasks
 
     register_consultation_journey(app)
+    register_consultation_contact(app)
+    register_consultation_results(app)
     register_video_tasks(app)
     from .services import register_services
 
