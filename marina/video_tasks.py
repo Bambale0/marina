@@ -24,20 +24,22 @@ def register_video_tasks(app):
         require(
             all(
                 type(route.get(k)) is int and route[k] > 0
-                for k in ("required_videos", "max_video_seconds", "response_hours")
+                for k in ("required_videos", "response_hours")
             ),
-            "Специалист должен настроить задание, длительность видео и срок ответа",
+            "Специалист должен настроить количество видео и срок ответа",
         )
         require(
-            route["required_videos"] <= 6 and route["max_video_seconds"] <= 600,
+            route["required_videos"] <= 6,
             "Проверьте ограничения задания",
         )
+        rules = {k: route[k] for k in ("required_videos", "response_hours")}
+        if "max_video_seconds" in route:
+            # Preserve the fingerprint for retries of leads created before duration was unlimited.
+            rules["max_video_seconds"] = route["max_video_seconds"]
         payload = {
             "lead_id": lead["id"],
             "amount_rub": lead["data"]["amount_rub"],
-            "rules": {
-                k: route[k] for k in ("required_videos", "max_video_seconds", "response_hours")
-            },
+            "rules": rules,
             "assignment": None,
             "videos": [],
             "recommendations": None,
@@ -151,11 +153,8 @@ def register_video_tasks(app):
                 409,
             )
             return task
-        info = verify_video(raw)
-        require(
-            float(info["format"]["duration"]) <= task["data"]["rules"]["max_video_seconds"],
-            "Видео длиннее задания специалиста",
-        )
+        # Duration is unrestricted, including tasks with an old max_video_seconds snapshot.
+        verify_video(raw)
         asset = uid()
         g.db.execute(
             "INSERT INTO blobs VALUES(?,?,?,?,?,?,?,?)",

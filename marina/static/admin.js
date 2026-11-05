@@ -123,7 +123,7 @@ const labels = {
   teen_senior: "Подростки 15–18 лет",
   adult: "Взрослые",
   required_videos: "Количество видео выполнения",
-  max_video_seconds: "Максимальная длина видео, секунд",
+  max_video_seconds: "Прежний лимит длительности (не применяется)",
   response_hours: "Срок ручного разбора, часов",
   material_filename: "Название PDF для выдачи",
   gift_text: "Сообщение с бесплатным материалом",
