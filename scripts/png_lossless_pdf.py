@@ -75,6 +75,8 @@ def main(source_dir, target_dir):
             {
                 "group": group,
                 "source_png": name,
+                "source_image": name,
+                "filename": path.name,
                 "source_sha256": hashlib.sha256(raw).hexdigest(),
                 "path": str(path),
                 "sha256": hashlib.sha256(pdf).hexdigest(),
