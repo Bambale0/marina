@@ -2,6 +2,7 @@
 
 from . import Problem
 from .funnel import price_text
+from .consultation_journey import button_text, display_price
 
 
 def quote_price(quote):
@@ -13,6 +14,15 @@ def quote_price(quote):
 def show_quote(bot, booking, quote, refreshed=False):
     data = quote["data"]
     price = quote_price(quote)
+    journey = booking["data"].get("journey_snapshot") or {}
+    if not journey.get("buttons") and booking["data"].get("run_id"):
+        response = bot.client.get(
+            "/api/funnel-runs/" + booking["data"]["run_id"] + "/consultation-journey"
+        )
+        if response.status_code == 200:
+            journey = response.json["journey"]
+    if journey.get("buttons"):
+        price = display_price(data["total"])
     admin = bot.api("/me")["account"]["role"] == "admin"
     prefix = "Расчёт обновлён. Проверьте условия и подтвердите покупку.\n\n" if refreshed else ""
     text = (
@@ -39,7 +49,6 @@ def show_quote(bot, booking, quote, refreshed=False):
     if admin:
         text += "\nДля администратора доступ без оплаты."
     if booking["data"].get("payment_timing") == "before_scheduling":
-        journey = booking["data"]["journey_snapshot"]
         text = (
             "🎯 Анкета принята! Ваши данные сохранены.\n\n"
             + (
@@ -58,11 +67,15 @@ def show_quote(bot, booking, quote, refreshed=False):
             (
                 "Открыть консультацию без оплаты"
                 if admin
-                else "💳 Оплатить консультацию за " + price,
+                else button_text(journey, "pay", price, "💳 Оплатить консультацию за {price}"),
                 "consultation_buy",
                 {"id": booking["id"], "quote_id": quote["id"]},
             ),
-            ("❌ Назад к описанию", "funnel_consultation", {"id": booking["data"]["run_id"]}),
+            (
+                button_text(journey, "back", price, "❌ Назад к описанию"),
+                "funnel_consultation",
+                {"id": booking["data"]["run_id"]},
+            ),
         ],
     )
 

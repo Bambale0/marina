@@ -235,6 +235,9 @@ def notify(app, owner, object_id, event):
                 or not checkout_open(db, order, int(app.config["CLOCK"]()))
             ):
                 return
+            from .consultation_journey import order_payment_label
+
+            caption = order_payment_label(db, order)
         require(account, "Получатель не найден")
         telegram(
             app,
@@ -243,7 +246,7 @@ def notify(app, owner, object_id, event):
                 "chat_id": account["telegram_id"],
                 "text": "Счёт готов. Оплатите на защищённой странице Lava.top:",
                 "reply_markup": {
-                    "inline_keyboard": [[{"text": "💳 Оплатить", "url": attempt["data"]["url"]}]]
+                    "inline_keyboard": [[{"text": caption, "url": attempt["data"]["url"]}]]
                 },
             },
         )
