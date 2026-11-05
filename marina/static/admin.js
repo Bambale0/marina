@@ -96,6 +96,25 @@ const labels = {
   answer: "ID варианта, при котором показывается вопрос",
   type: "Тип правил",
   consultation_journey: "Описание, анкета и оплата диагностики",
+  result_delivery: "Персональный письменный результат",
+  session_minutes: "Длительность консультации по умолчанию, минут",
+  due_hours: "Срок результата, часов (пусто — срок не указан в источнике)",
+  source_page: "Страница авторского документа",
+  filename: "Имя файла",
+  contact_service: "Личный контакт после оплаты",
+  start_hour: "Начало рабочего окна, час",
+  end_hour: "Конец рабочего окна, час",
+  due_minutes: "Срок контакта, рабочих минут",
+  contact_due_at: "Связаться до",
+  contacted_at: "Личный контакт подтверждён",
+  manual_payment: "Подтверждение оплаты специалистом",
+  confirmed_at: "Время подтверждения",
+  confirmed_by: "Специалист",
+  reference: "Основание подтверждения оплаты",
+  result_id: "Персональный результат",
+  booking_id: "Запись на консультацию",
+  published_at: "Опубликован",
+  delivered_at: "Доставлен",
   payment_timing: "Оплата: before_scheduling / after_scheduling",
   requested_payment_timing: "Порядок оплаты из авторского документа",
   buttons: "Тексты кнопок консультации",
@@ -408,6 +427,10 @@ function structuredEditor(data, context = "") {
               ? Number(v)
               : v,
           );
+    } else if (context === "result_delivery" && name === "due_hours") {
+      const f = field(title, "number", value == null ? "" : value);
+      box.append(f.node);
+      getters[name] = () => f.input.value.trim() === "" ? null : Number(f.input.value);
     } else if (value && typeof value === "object") {
       const editor = structuredEditor(value, name);
       box.append(el("fieldset", {}, el("legend", {}, title), editor.node));
@@ -1011,18 +1034,39 @@ async function adminCard(id) {
       actions.append(button("Заявка на диагностику", () => adminCard(o.data.booking_id), true));
   }
   if(o.kind==="video_task") {
+    if (o.data.manual_payment?.status !== "confirmed") {
+      const reference = field("Основание подтверждения оплаты", "text");
+      actions.append(el("p", {}, "Оплата не подтверждена. Сумма заявки: " + o.data.amount_rub + " ₽."),
+        reference.node,
+        button("Подтвердить оплату", () => command("/admin/video-tasks/" + id + "/confirm-payment", {
+          amount_rub: o.data.amount_rub, reference: reference.get(),
+        }), true));
+    } else {
+      actions.append(el("p", {}, "Оплата подтверждена специалистом: " + o.data.manual_payment.amount_rub + " ₽"));
+    }
     if(["requested","awaiting_videos","submitted"].includes(o.status))
       actions.append(button("Закрыть видеоразбор",()=>command("/admin/video-tasks/"+id+"/close"),true));
     if(o.status==="requested") actions.append(button("Выдать задание родителю",()=>command("/admin/video-tasks/"+id+"/assignment")));
     if(o.status==="submitted") {
-      const responseIds=[],responseFile=field("Аудиоразбор или материал рекомендаций (MP3, OGG, MP4, PDF)","file");
-      actions.append(responseFile.node,button("Прикрепить материал рекомендаций",async()=>{
+      const responseIds=[],responseFile=field("Аудиоразбор MP3 или OGG/Opus; дополнительные материалы MP4/PDF", "file");
+      const audio = selectField("Аудио для публикации", [["", "Выберите аудио"],
+        ...(card.media || []).filter(f => ["audio/mpeg", "audio/ogg"].includes(f.mime))
+          .map(f => [f.id, f.mime + " · " + dateTime(f.created)])]);
+      actions.append(el("p", {}, "Для завершения необходим аудиоразбор специалиста."),
+        responseFile.node,button("Прикрепить материал рекомендаций",async()=>{
         if(!responseFile.input.files[0]) throw new Error("Выберите файл");
         const data=new FormData();data.append("file",responseFile.input.files[0]);data.append("reason",why.get());
         const uploaded=await api("/admin/video-tasks/"+id+"/media","POST",data);
-        responseIds.push(uploaded.id);notice("Материал сохранён. Теперь опубликуйте рекомендации.");
+        if (["audio/mpeg", "audio/ogg"].includes(uploaded.data.mime)) {
+          audio.input.append(el("option", {value: uploaded.id}, "Загруженное аудио"));
+          audio.input.value = uploaded.id;
+        } else responseIds.push(uploaded.id);
+        notice("Материал сохранён. Теперь опубликуйте рекомендации.");
       },true));
-      actions.append(button("Отправить коррекцию и рекомендации",()=>command("/admin/video-tasks/"+id+"/recommendations",{attachments:responseIds})));
+      actions.append(audio.node, button("Отправить коррекцию и рекомендации", () => {
+        if (!audio.get()) throw new Error("Выберите аудиоразбор для публикации");
+        return command("/admin/video-tasks/"+id+"/recommendations", {attachments: [audio.get(), ...responseIds]});
+      }));
     }
     for(const item of o.data.videos || []) actions.append(button("Открыть видео: пункт "+item.slot,async()=>{
       const src=await authenticatedFile("/video-tasks/"+id+"/video/"+item.slot);
@@ -1031,6 +1075,37 @@ async function adminCard(id) {
     },true));
   }
   if(o.kind==="consultation_lead" && o.status!=="closed") actions.append(button("Закрыть обращение",()=>command("/admin/consultation-leads/"+id+"/close"),true));
+  if (o.kind === "consultation_result") {
+    actions.append(el("h2", {}, o.data.title), el("p", {}, o.data.due_at != null
+      ? "Срок отправки: " + dateTime(o.data.due_at)
+      : "Срок отправки не указан в авторском документе."));
+    if (o.status === "in_progress") {
+      const pdf = field("Персональный PDF специалиста", "file");
+      pdf.input.accept = "application/pdf,.pdf";
+      const selected = selectField("PDF для публикации", [["", "Выберите PDF"],
+        ...(card.media || []).filter(f => f.mime === "application/pdf")
+          .map(f => [f.id, "PDF · " + dateTime(f.created)])]);
+      actions.append(pdf.node, button("Загрузить персональный PDF", async () => {
+        if (!pdf.input.files[0]) throw new Error("Выберите PDF специалиста");
+        const data = new FormData();
+        data.append("file", pdf.input.files[0]);
+        data.append("reason", why.get());
+        const uploaded = await api("/admin/consultation-results/" + id + "/media", "POST", data);
+        selected.input.append(el("option", {value: uploaded.id}, "Загруженный PDF"));
+        selected.input.value = uploaded.id;
+        notice("PDF сохранён. Проверьте документ и опубликуйте результат.");
+      }, true), selected.node,
+      button("Опубликовать персональный PDF", () => {
+        if (!selected.get()) throw new Error("Выберите PDF для публикации");
+        return command("/admin/consultation-results/" + id + "/publish", {attachment_id: selected.get()});
+      }));
+    } else {
+      actions.append(el("p", {}, o.data.delivered_at != null
+        ? "Доставлен в Telegram: " + dateTime(o.data.delivered_at)
+        : "PDF опубликован. Доставка в Telegram ожидает подтверждения."));
+    }
+    actions.append(button("Открыть запись на консультацию", () => adminCard(o.data.booking_id), true));
+  }
   if (o.kind === "report") {
     const n = o.data.revisions?.length || 0;
     actions.append(
@@ -1091,11 +1166,16 @@ async function adminCard(id) {
     );
   }
   if (o.kind === "booking") {
+    if (o.data.contact_due_at != null && o.data.contacted_at == null && o.status !== "cancelled")
+      actions.append(el("p", {}, "Лично связаться до: " + dateTime(o.data.contact_due_at)),
+        button("Подтвердить личный контакт", () => command("/admin/bookings/" + id + "/contacted"), true));
+    if (o.data.result_id)
+      actions.append(button("Открыть персональный результат", () => adminCard(o.data.result_id), true));
     const time = field(
         "Дата и время в часовом поясе браузера",
         "datetime-local",
       ),
-      duration = field("Длительность, минут", "number", 60);
+      duration = field("Длительность, минут", "number", o.data.journey_snapshot?.session_minutes || 60);
     actions.append(
       time.node,
       duration.node,
@@ -1599,38 +1679,53 @@ async function adminObjects(offset = 0) {
       ["", "Любое состояние"],
       ...Object.entries(states),
     ]);
-  const list = el("div", { class: "stack" });
+  const list = el("div", {
+    class: "stack", "data-object-list": "true", "aria-busy": "false",
+  });
+  let loadVersion = 0;
   const load = async (page = 0) => {
-    const data = await api(
-      "/admin/objects?kind=" +
-        encodeURIComponent(kind.get()) +
-        "&status=" +
-        encodeURIComponent(status.get()) +
-        "&offset=" +
-        page,
-    );
-    list.replaceChildren(
-      ...data.items.map((o) =>
-        el(
-          "article",
-          { class: "card" },
-          el("h3", {}, o.data.title || o.data.name || kinds[o.kind] || o.kind),
-          badge(o.status),
-          el("p", { class: "quiet" }, dateTime(o.updated)),
-          button("Открыть карточку", () => adminCard(o.id), true),
+    const version = ++loadVersion;
+    list.setAttribute("aria-busy", "true");
+    list.replaceChildren(empty("Загрузка объектов…"));
+    try {
+      const data = await api(
+        "/admin/objects?kind=" +
+          encodeURIComponent(kind.get()) +
+          "&status=" +
+          encodeURIComponent(status.get()) +
+          "&offset=" +
+          page,
+      );
+      if (version !== loadVersion) return;
+      list.replaceChildren(
+        ...data.items.map((o) =>
+          el(
+            "article",
+            { class: "card", "data-object-id": o.id },
+            el("h3", {}, o.data.title || o.data.name || kinds[o.kind] || o.kind),
+            badge(o.status),
+            el("p", { class: "quiet" }, dateTime(o.updated)),
+            button("Открыть карточку", () => adminCard(o.id), true),
+          ),
         ),
-      ),
-      el(
-        "div",
-        { class: "row" },
-        page > 0
-          ? button("Назад", () => load(Math.max(0, page - 100)), true)
-          : null,
-        data.items.length === 100
-          ? button("Далее", () => load(page + 100), true)
-          : null,
-      ),
-    );
+        el(
+          "div",
+          { class: "row" },
+          page > 0
+            ? button("Назад", () => load(Math.max(0, page - 100)), true)
+            : null,
+          data.items.length === 100
+            ? button("Далее", () => load(page + 100), true)
+            : null,
+        ),
+      );
+    } catch (error) {
+      if (version !== loadVersion) return;
+      list.replaceChildren(empty("Не удалось загрузить объекты. Повторите выбор фильтра."));
+      throw error;
+    } finally {
+      if (version === loadVersion) list.setAttribute("aria-busy", "false");
+    }
   };
   kind.input.onchange = () => safe(() => load());
   status.input.onchange = () => safe(() => load());

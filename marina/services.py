@@ -288,7 +288,11 @@ def register_services(app):
                 media = unpack(record)
                 if media["data"].get("purpose") == "specialist_response":
                     case = object_get(g.db, media["data"]["case_id"], owner=g.actor["id"])
-                    require(case["kind"] in ("case", "video_task"), "Файл ответа не найден", 404)
+                    require(
+                        case["kind"] in ("case", "video_task", "consultation_result"),
+                        "Файл ответа не найден",
+                        404,
+                    )
                     require(
                         id in case["data"].get("answer_attachments", []),
                         "Файл ответа ещё не опубликован",
@@ -508,6 +512,14 @@ def register_services(app):
         obj = object_get(g.db, id, "booking")
         d = body()
         why = reason(d)
+        if action == "complete" and obj["status"] == "completed":
+            require(
+                d.get("completed_at", obj["data"].get("completed_at"))
+                == obj["data"].get("completed_at"),
+                "Время завершения уже зафиксировано",
+                409,
+            )
+            return obj
         require(d.get("revision") == obj["revision"], "Заявка изменена", 409)
         payload = {**obj["data"]}
         if action in ("connection", "complete") and payload.get("run_id"):
@@ -564,10 +576,20 @@ def register_services(app):
             )
             if action == "complete":
                 require(obj["status"] == "confirmed", "Встреча не подтверждена")
+                completed_at = d.get("completed_at", g.now)
+                require(
+                    type(completed_at) is int and obj["created"] <= completed_at <= g.now,
+                    "Укажите фактическое время состоявшейся консультации",
+                )
+                payload["completed_at"] = completed_at
             state = "cancelled" if action == "cancel" else "completed"
         else:
             require(False, "Неизвестное действие", 404)
         result = update(g.db, obj, g.now, payload, state)
+        if action == "complete":
+            from .consultation_results import create_consultation_result
+
+            result = create_consultation_result(g.db, result, g.now, g.actor["id"], why)
         audit(
             g.db,
             g.actor["id"],
@@ -596,6 +618,8 @@ def register_services(app):
         obj = object_get(g.db, id, "booking", g.actor["id"])
         d = body()
         require(action in ("confirm", "reschedule", "cancel"), "Неизвестное действие", 404)
+        if action == "reschedule" and obj["status"] == "reschedule_requested":
+            return obj
         if action in ("reschedule", "cancel"):
             require(obj["status"] not in ("cancelled", "completed"), "Встреча уже закрыта", 409)
         if action == "confirm":
@@ -613,7 +637,11 @@ def register_services(app):
             g.db,
             obj,
             g.now,
-            {**obj["data"], "confirmed_at": g.now if action == "confirm" else None},
+            {
+                **obj["data"],
+                "confirmed_at": g.now if action == "confirm" else None,
+                **({"connection": None} if action in ("reschedule", "cancel") else {}),
+            },
             {
                 "confirm": "confirmed",
                 "reschedule": "reschedule_requested",

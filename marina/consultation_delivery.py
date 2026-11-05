@@ -114,7 +114,7 @@ def notify_specialist_event(app, owner, id, event):
                     + {
                         "booking": "Запрос записи",
                         "contact": "Вопрос специалисту",
-                        "download": "Получен чек-лист",
+                        "download": "Запрошен чек-лист",
                     }[obj["data"]["action"]]
                     + "\nСтоимость услуги: "
                     + str(obj["data"]["amount_rub"])

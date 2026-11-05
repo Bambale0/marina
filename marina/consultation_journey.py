@@ -82,6 +82,19 @@ def material_ready(db, id):
 
 def validate_journey(db, d):
     require(isinstance(d, dict), "Проверьте сценарий записи")
+    if "contact_service" in d:
+        from .consultation_contact import validate_contact_service
+
+        validate_contact_service(d["contact_service"])
+    if "session_minutes" in d:
+        require(
+            type(d["session_minutes"]) is int and 5 <= d["session_minutes"] <= 480,
+            "Укажите длительность консультации по умолчанию от 5 до 480 минут",
+        )
+    if d.get("result_delivery") is not None:
+        from .consultation_results import validate_result_delivery
+
+        validate_result_delivery(d["result_delivery"])
     for key in (
         "version",
         "description",

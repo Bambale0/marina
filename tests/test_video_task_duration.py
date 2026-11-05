@@ -162,12 +162,21 @@ def test_existing_legacy_video_task_can_be_replayed_without_fingerprint_conflict
         )
         assert changed.rowcount == 1
 
+    expected_public = owner.get("/api/video-tasks/" + task["id"]).json
     repeated = owner.post("/api/video-tasks", json={"lead_id": lead_id})
     assert repeated.status_code == 201, repeated.json
     assert repeated.json["id"] == task["id"]
     assert repeated.json["revision"] == legacy_task["revision"]
-    assert repeated.json["data"] == legacy_task_data
+    assert repeated.json == expected_public
     with transaction(app.config["DATABASE"]) as db:
+        assert object_get(db, task["id"])["data"] == legacy_task_data
+        assert (
+            db.execute(
+                "SELECT fingerprint FROM dedup WHERE scope=? AND key=?",
+                ("video-task:" + task["owner"], lead_id),
+            ).fetchone()["fingerprint"]
+            == fingerprint
+        )
         assert db.execute("SELECT COUNT(*) FROM objects WHERE kind='video_task'").fetchone()[0] == 1
         assert (
             db.execute(

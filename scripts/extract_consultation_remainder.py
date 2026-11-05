@@ -21,6 +21,14 @@ config = {
     },
     "ages": {},
 }
+# Operational metadata for the author-promised personal result (PDF pages 2, 5, 9, 13).
+# The teen source promises a written result but does not specify a delivery deadline.
+result_specs = {
+    "3-4": ("Маршрутная карта коррекции", 24, 2),
+    "5-6": ("Персональный письменный маршрут к 1 сентября", 24, 5),
+    "7-9": ("Письменный протокол коррекции", 24, 9),
+    "10-14": ("Маршрутный лист дофаминовой перезагрузки", None, 13),
+}
 for group, b in zip(
     ("3-4", "5-6", "7-9", "10-14"), [s[a:b] for a, b in zip(starts, starts[1:] + [outside])]
 ):
@@ -112,6 +120,23 @@ for group, b in zip(
         "buttons": labels,
         "payment_timing": "after_scheduling",
         "requested_payment_timing": "before_scheduling",
+        "session_minutes": 75 if group == "10-14" else 60,
+        "contact_service": {
+            "version": "author-remainder-20261105",
+            "timezone": "Europe/Moscow",
+            "start_hour": 9,
+            "end_hour": 21,
+            "due_minutes": 30,
+            "source_page": {"3-4": 3, "5-6": 7, "7-9": 10, "10-14": 14}[group],
+        },
+        "result_delivery": {
+            "version": "author-remainder-20261105",
+            "title": result_specs[group][0],
+            "format": "pdf",
+            "filename": result_specs[group][0] + ".pdf",
+            "due_hours": result_specs[group][1],
+            "source_page": result_specs[group][2],
+        },
     }
 out = s[outside:]
 menu = out.split("Сообщение бота:\n", 1)[1].split("[Кнопка]:", 1)[0].strip()

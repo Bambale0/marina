@@ -28,9 +28,16 @@ def response_attachments(db, case, ids):
 def register_attachments(app):
     @app.post("/api/admin/cases/<id>/media")
     @app.post("/api/admin/video-tasks/<id>/media")
+    @app.post("/api/admin/consultation-results/<id>/media")
     @protected(admin=True)
     def upload_response(id):
-        parent_kind = "video_task" if request.path.startswith("/api/admin/video-tasks/") else "case"
+        parent_kind = (
+            "consultation_result"
+            if request.path.startswith("/api/admin/consultation-results/")
+            else "video_task"
+            if request.path.startswith("/api/admin/video-tasks/")
+            else "case"
+        )
         obj = object_get(g.db, id, parent_kind)
         require(
             obj["status"] in ("submitted", "in_progress", "followup_pending"),
@@ -39,8 +46,24 @@ def register_attachments(app):
         why = reason({"reason": request.form.get("reason", "")})
         file = request.files.get("file")
         require(file, "Выберите файл")
-        data = file.read(20 * 1024 * 1024 + 1)
-        require(0 < len(data) <= 20 * 1024 * 1024, "Лимит 20 МБ")
+        from .commerce import policies
+
+        policy = policies(g.db, "privacy")
+        limit = 20 * 1024 * 1024
+        if parent_kind == "consultation_result":
+            require(policy, "Настройте политику хранения персональных результатов")
+            limit = min(
+                limit, policy["data"].get("media_max_bytes", 0), app.config["MAX_CONTENT_LENGTH"]
+            )
+            require(
+                limit > 0 and policy["data"].get("retention_days", 0) > 0,
+                "Настройте размер и срок хранения PDF",
+            )
+            require(
+                file.mimetype == "application/pdf", "Персональный письменный результат нужен в PDF"
+            )
+        data = file.read(limit + 1)
+        require(0 < len(data) <= limit, "Файл превышает разрешённый размер")
         mime = file.mimetype
         valid = (
             (mime == "video/mp4" and data[4:8] == b"ftyp")
@@ -70,9 +93,6 @@ def register_attachments(app):
                 g.now,
             ),
         )
-        from .commerce import policies
-
-        policy = policies(g.db, "privacy")
         require(policy or app.config.get("TESTING"), "Настройте политику хранения")
         expires = g.now + (policy["data"]["retention_days"] if policy else 1) * 86400
         media = insert(

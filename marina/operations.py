@@ -199,6 +199,14 @@ def notify_consultation(app, owner, object_id, event):
 def notify(app, owner, object_id, event):
     from .providers import telegram
 
+    if event == "consultation.contact_due":
+        from .consultation_contact import notify_contact_due
+
+        return notify_contact_due(app, owner, object_id)
+    if event.startswith("consultation_result."):
+        from .consultation_results import notify_consultation_result
+
+        return notify_consultation_result(app, owner, object_id, event)
     if event == "consultation.lead" or event.startswith("video_task."):
         from .consultation_delivery import notify_specialist_event
 
@@ -515,6 +523,9 @@ def work_once(app, send=None):
 def tick(app):
     now = int(app.config["CLOCK"]())
     with transaction(app.config["DATABASE"]) as db:
+        from .consultation_contact import tick_contacts
+
+        tick_contacts(db, now)
         for row in db.execute(
             "SELECT * FROM objects WHERE kind='video_review' AND status NOT IN ('closed','completed') "
             "AND json_extract(data,'$.next_contact')<=?",
@@ -559,7 +570,7 @@ def tick(app):
         settings = policies(db, "operations")
         d = settings["data"] if settings else {}
         for row in db.execute(
-            "SELECT * FROM objects WHERE kind IN ('report','case','video_task') AND status NOT IN ('published','closed','completed')"
+            "SELECT * FROM objects WHERE kind IN ('report','case','video_task','consultation_result') AND status NOT IN ('published','closed','completed')"
         ).fetchall():
             obj = unpack(row)
             due = (
@@ -639,15 +650,21 @@ def register_operations(app):
     @app.get("/api/admin/queue")
     @protected(admin=True)
     def queue():
+        from .consultation_contact import PENDING_CONTACT_SQL, contact_pending
+
         start = offset()
         where = (
-            "kind IN ('video_review','video_task','consultation_lead','report','case','booking','reconciliation',"
+            "kind IN ('video_review','video_task','consultation_lead','consultation_result','report','case','booking','reconciliation',"
             "'data_request','ai_job','refund','payment_event','retention_task') "
             "AND status NOT IN ('published','closed','completed','cancelled',"
             "'resolved','processed','confirmed')"
         )
+        where = "((" + where + ") OR (" + PENDING_CONTACT_SQL + "))"
         due_sql = (
             "CASE WHEN kind='video_review' THEN json_extract(data,'$.next_contact') "
+            "WHEN kind='booking' THEN CASE WHEN ("
+            + PENDING_CONTACT_SQL
+            + ") THEN json_extract(data,'$.contact_due_at') ELSE NULL END "
             "WHEN status='followup_pending' THEN json_extract(data,'$.followup.due_at') "
             "ELSE json_extract(data,'$.due_at') END"
         )
@@ -665,7 +682,11 @@ def register_operations(app):
         ]
         for obj in rows:
             due = (
-                obj["data"].get("next_contact")
+                obj["data"]["contact_due_at"]
+                if contact_pending(obj)
+                else None
+                if obj["kind"] == "booking"
+                else obj["data"].get("next_contact")
                 if obj["kind"] == "video_review"
                 else obj["data"].get("followup", {}).get("due_at")
                 if obj["status"] == "followup_pending"

@@ -285,11 +285,18 @@ def fulfill(db, order, paid_at, now):
                 obj = insert(db, "case", payload, now, order["owner"], line["subject_id"])
         elif service == "booking":
             obj = object_get(db, d.get("booking_id"), "booking", order["owner"])
+            from .consultation_contact import paid_contact_fields
+
             obj = update(
                 db,
                 obj,
                 now,
-                {**obj["data"], "order_id": order["id"], "paid_at": paid_at},
+                {
+                    **obj["data"],
+                    "order_id": order["id"],
+                    "paid_at": paid_at,
+                    **paid_contact_fields(obj, order, paid_at),
+                },
             )
             if d.get("consultation_run_id") and d.get("access_source") != "admin":
                 emit(db, order["owner"], obj["id"], "consultation.paid", now)

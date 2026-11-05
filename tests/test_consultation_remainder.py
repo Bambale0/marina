@@ -246,6 +246,49 @@ def task_setup(app):
     return admin, owner, r.json
 
 
+def make_response_audio(tmp_path, extension="ogg"):
+    import subprocess
+
+    audio = tmp_path / ("recommendations." + extension)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc",
+            "-t",
+            "0.2",
+            "-c:a",
+            "libopus" if extension == "ogg" else "libmp3lame",
+            str(audio),
+        ],
+        check=True,
+        timeout=20,
+    )
+    return audio.read_bytes()
+
+
+def upload_task_response_audio(admin, task, tmp_path, extension="ogg"):
+    raw = make_response_audio(tmp_path, extension)
+    uploaded = admin.post(
+        "/api/admin/video-tasks/" + task["id"] + "/media",
+        data={
+            "reason": "Синтетическое аудио специалиста для проверки публикации",
+            "file": (
+                io.BytesIO(raw),
+                "recommendations." + extension,
+                "audio/ogg" if extension == "ogg" else "audio/mpeg",
+            ),
+        },
+    )
+    assert uploaded.status_code == 201, uploaded.json
+    return uploaded.json
+
+
 def test_video_assignment_upload_review_and_recommendations(app, tmp_path):
     from tests.test_identity import login
 
@@ -291,11 +334,13 @@ def test_video_assignment_upload_review_and_recommendations(app, tmp_path):
         owner.post("/api/admin/video-tasks/" + task["id"] + "/recommendations", json={}).status_code
         == 403
     )
+    audio = upload_task_response_audio(admin, task, tmp_path)
     answer = admin.post(
         "/api/admin/video-tasks/" + task["id"] + "/recommendations",
         json={
             "revision": submitted.json["revision"],
             "text": "Разбор выполнения, коррекция движений и индивидуальные рекомендации",
+            "attachments": [audio["id"]],
             "reason": "Ручной разбор специалистом",
         },
     )
@@ -314,7 +359,8 @@ def test_video_assignment_upload_review_and_recommendations(app, tmp_path):
     }
     app.config["FILE_TRANSPORT"] = lambda *args: files.append(args)
     drain(app)
-    assert len(files) == 3
+    assert len(files) == 4
+    assert len([args for args in files if args[1] == "recommendations.ogg"]) == 1
     assert not any("Задание специалиста" in d.get("text", "") and d["chat_id"] == 2 for d in calls)
     assert any(
         "индивидуальные рекомендации" in d.get("text", "") and d["chat_id"] == 2 for d in calls
@@ -379,11 +425,13 @@ def test_parent_video_task_in_real_browser(app, tmp_path):
             expect(page.get_by_role("heading", name="Мои обращения", exact=True)).to_be_visible()
             current = owner.get("/api/video-tasks/" + task["id"]).json
             assert current["status"] == "submitted"
+            audio = upload_task_response_audio(admin, current, tmp_path)
             response = admin.post(
                 "/api/admin/video-tasks/" + task["id"] + "/recommendations",
                 json={
                     "revision": current["revision"],
                     "text": "Ручная коррекция и рекомендации специалиста",
+                    "attachments": [audio["id"]],
                     "reason": "Проверенный разбор",
                 },
             )

@@ -80,7 +80,24 @@
         "back": "❌ Назад"
       },
       "payment_timing": "after_scheduling",
-      "requested_payment_timing": "before_scheduling"
+      "requested_payment_timing": "before_scheduling",
+      "session_minutes": 60,
+      "contact_service": {
+        "version": "author-remainder-20261105",
+        "timezone": "Europe/Moscow",
+        "start_hour": 9,
+        "end_hour": 21,
+        "due_minutes": 30,
+        "source_page": 3
+      },
+      "result_delivery": {
+        "version": "author-remainder-20261105",
+        "title": "Маршрутная карта коррекции",
+        "format": "pdf",
+        "filename": "Маршрутная карта коррекции.pdf",
+        "due_hours": 24,
+        "source_page": 2
+      }
     },
     "5-6": {
       "version": "remainder-20261105",
@@ -161,7 +178,24 @@
         "back": "❌ Назад к описанию"
       },
       "payment_timing": "after_scheduling",
-      "requested_payment_timing": "before_scheduling"
+      "requested_payment_timing": "before_scheduling",
+      "session_minutes": 60,
+      "contact_service": {
+        "version": "author-remainder-20261105",
+        "timezone": "Europe/Moscow",
+        "start_hour": 9,
+        "end_hour": 21,
+        "due_minutes": 30,
+        "source_page": 7
+      },
+      "result_delivery": {
+        "version": "author-remainder-20261105",
+        "title": "Персональный письменный маршрут к 1 сентября",
+        "format": "pdf",
+        "filename": "Персональный письменный маршрут к 1 сентября.pdf",
+        "due_hours": 24,
+        "source_page": 5
+      }
     },
     "7-9": {
       "version": "remainder-20261105",
@@ -246,7 +280,24 @@
         "back": "❌ Назад к описанию"
       },
       "payment_timing": "after_scheduling",
-      "requested_payment_timing": "before_scheduling"
+      "requested_payment_timing": "before_scheduling",
+      "session_minutes": 60,
+      "contact_service": {
+        "version": "author-remainder-20261105",
+        "timezone": "Europe/Moscow",
+        "start_hour": 9,
+        "end_hour": 21,
+        "due_minutes": 30,
+        "source_page": 10
+      },
+      "result_delivery": {
+        "version": "author-remainder-20261105",
+        "title": "Письменный протокол коррекции",
+        "format": "pdf",
+        "filename": "Письменный протокол коррекции.pdf",
+        "due_hours": 24,
+        "source_page": 9
+      }
     },
     "10-14": {
       "version": "remainder-20261105",
@@ -327,7 +378,24 @@
         "back": "❌ Назад к описанию"
       },
       "payment_timing": "after_scheduling",
-      "requested_payment_timing": "before_scheduling"
+      "requested_payment_timing": "before_scheduling",
+      "session_minutes": 75,
+      "contact_service": {
+        "version": "author-remainder-20261105",
+        "timezone": "Europe/Moscow",
+        "start_hour": 9,
+        "end_hour": 21,
+        "due_minutes": 30,
+        "source_page": 14
+      },
+      "result_delivery": {
+        "version": "author-remainder-20261105",
+        "title": "Маршрутный лист дофаминовой перезагрузки",
+        "format": "pdf",
+        "filename": "Маршрутный лист дофаминовой перезагрузки.pdf",
+        "due_hours": null,
+        "source_page": 13
+      }
     }
   },
   "outside": {
