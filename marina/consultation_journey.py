@@ -9,14 +9,66 @@ from .db import audit, emit, insert, update
 from .screening import idempotent
 
 
+BUTTON_KEYS = {
+    "info",
+    "book_promo",
+    "book_regular",
+    "book_target",
+    "contact",
+    "support",
+    "contact_open",
+    "pay",
+    "back",
+}
+
+
+def display_price(amount):
+    require(type(amount) is int and amount >= 0, "Проверьте сумму")
+    rub, cents = divmod(amount, 100)
+    return f"{rub:,}".replace(",", " ") + (f",{cents:02}" if cents else "") + " ₽"
+
+
+def button_text(journey, key, price, fallback):
+    return journey.get("buttons", {}).get(key, fallback).format(price=price)
+
+
+def presentation_journey(db, journey, group):
+    from .funnel import published
+
+    result = copy.deepcopy(journey)
+    if result and not result.get("buttons"):
+        current = published(db, group)
+        labels = current["data"].get("consultation_journey", {}).get("buttons") if current else None
+        if labels:
+            result["buttons"] = copy.deepcopy(labels)
+    return result
+
+
 def journey_for(db, run):
     from .funnel import published
 
     saved = run["data"]["snapshot"].get("consultation_journey")
     current = published(db, run["data"]["child_age"]) if not saved else None
-    return copy.deepcopy(
-        saved or (current["data"].get("consultation_journey") if current else None)
+    return presentation_journey(
+        db,
+        saved or (current["data"].get("consultation_journey") if current else None),
+        run["data"]["child_age"],
     )
+
+
+def order_payment_label(db, order):
+    data = order["data"]
+    run_id = data.get("consultation_run_id")
+    if not run_id or data.get("currency") != "RUB":
+        return "💳 Оплатить"
+    run = object_get(db, run_id, "funnel_run", order["owner"])
+    journey = data.get("booking_snapshot", {}).get("data", {}).get(
+        "journey_snapshot"
+    ) or journey_for(db, run)
+    journey = presentation_journey(db, journey, run["data"]["child_age"])
+    if not journey or not journey.get("buttons"):
+        return "💳 Оплатить"
+    return button_text(journey, "pay", display_price(data["total"]), "💳 Оплатить")
 
 
 def material_ready(db, id):
@@ -47,6 +99,30 @@ def validate_journey(db, d):
         d.get("payment_timing") in ("before_scheduling", "after_scheduling"),
         "Выберите порядок оплаты",
     )
+    labels = d.get("buttons")
+    if labels is not None:
+        from string import Formatter
+
+        require(
+            isinstance(labels, dict) and set(labels) == BUTTON_KEYS, "Настройте тексты всех кнопок"
+        )
+        for label in labels.values():
+            require(
+                isinstance(label, str) and 0 < len(label.strip()) <= 120, "Проверьте текст кнопки"
+            )
+            try:
+                parts = list(Formatter().parse(label))
+                require(
+                    all(
+                        field is None or (field == "price" and not spec and conversion is None)
+                        for _, field, spec, conversion in parts
+                    ),
+                    "В кнопке разрешена только переменная {price} без форматирования",
+                )
+                label.format(price="1 000 ₽")
+            except (ValueError, KeyError, IndexError, AttributeError):
+                require(False, "Проверьте переменные кнопки")
+        require("{price}" in labels["pay"], "В кнопке оплаты нужна динамическая сумма {price}")
     qs = d.get("questions")
     require(
         isinstance(qs, list) and len(qs) == 3 and all(isinstance(q, dict) for q in qs),
@@ -151,6 +227,11 @@ def validate_routes(db, d):
             "Проверьте тексты категории",
         )
         require(type(r.get("amount_rub")) is int and r["amount_rub"] > 0, "Укажите цену категории")
+        if "contact_label" in r:
+            require(
+                isinstance(r["contact_label"], str) and 0 < len(r["contact_label"].strip()) <= 120,
+                "Проверьте кнопку связи",
+            )
         if r.get("material_id"):
             require(
                 all(
@@ -210,6 +291,7 @@ def register_consultation_journey(app):
             booking = object_get(g.db, run["data"]["booking_id"], "booking", g.actor["id"])
             eligible = booking["data"].get("promotion", {}).get("eligible") is True
             j = booking["data"].get("journey_snapshot") or j
+        j = presentation_journey(g.db, j, run["data"]["child_age"])
         return {
             "journey": j,
             "booking_id": run["data"].get("booking_id"),

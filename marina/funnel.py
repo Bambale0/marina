@@ -339,7 +339,7 @@ def consultation_promotion_eligible(db, run, now):
     )
 
 
-def result_buttons(obj, prior_guide=None):
+def result_buttons(obj, prior_guide=None, journey=None):
     """Use the same result navigation for the first delivery and resume."""
     data = obj["data"]
     snapshot = data.get("snapshot", {})
@@ -351,9 +351,10 @@ def result_buttons(obj, prior_guide=None):
         if snapshot.get("channel_url"):
             return [("📚 Полезные материалы", "url", {"url": snapshot["channel_url"]})]
     if zone == "red":
+        buttons = (journey or snapshot.get("consultation_journey") or {}).get("buttons", {})
         return [
-            ("📋 Что входит в диагностику", "funnel_consultation", values),
-            ("📅 Записаться на диагностику", "funnel_book", values),
+            (buttons.get("info", "📋 Что входит в диагностику"), "funnel_consultation", values),
+            (buttons.get("book_regular", "📅 Записаться на диагностику"), "funnel_book", values),
         ]
     return []
 
@@ -365,7 +366,9 @@ def public_run(obj):
         prior = owned_guide(
             g.db, obj["owner"], d.get("child_age"), admin=g.actor["role"] == "admin"
         )
-        d["result_buttons"] = result_buttons(obj, prior)
+        from .consultation_journey import journey_for
+
+        d["result_buttons"] = result_buttons(obj, prior, journey_for(g.db, obj))
     snapshot = d.pop("snapshot", {})
     d.pop("approval", None)
     d.pop("progress_message_id", None)
@@ -1463,6 +1466,9 @@ def notify_funnel(app, owner, id, event):
                 return
         d = obj["data"]
         snapshot = d.get("snapshot", {})
+        from .consultation_journey import journey_for, display_price
+
+        journey = journey_for(db, obj) if obj["kind"] == "funnel_run" else None
         if event == "funnel.age":
             if obj["status"] != "waiting_age" or d.get("notifications_stopped"):
                 return
@@ -1593,9 +1599,14 @@ def notify_funnel(app, owner, id, event):
         "notify:" + id,
     )
     values = {"id": id}
-    consult = [("📋 О диагностике", "funnel_consultation", values)]
+    labels = (journey or {}).get("buttons", {})
+    consult = [(labels.get("info", "📋 О диагностике"), "funnel_consultation", values)]
     if snapshot.get("contact_url"):
-        consult.append(("💬 Написать Марине", "url", {"url": snapshot["contact_url"]}))
+        consult.append(
+            (labels.get("contact", "💬 Написать Марине"), "funnel_contact", values)
+            if journey
+            else ("💬 Написать Марине", "url", {"url": snapshot["contact_url"]})
+        )
     if event == "funnel.age":
         bot.send(render_copy(text, {}, account["name"]), bot.funnel_age_buttons(id))
     elif event.startswith("funnel.progress."):
@@ -1627,7 +1638,7 @@ def notify_funnel(app, owner, id, event):
             )
     elif event == "funnel.result":
         text = d["result"]["text"] + "\n\n" + d["result"]["limitations"]
-        buttons = result_buttons(obj, prior_guide)
+        buttons = result_buttons(obj, prior_guide, journey)
         if d.get("progress_message_id"):
             bot.edit(d["progress_message_id"], text, buttons)
         else:
@@ -1767,6 +1778,7 @@ def notify_funnel(app, owner, id, event):
         copy_values = {
             "deadline": deadline,
             "consultation_price": str(snapshot["consultation_amount_rub"]) + " ₽",
+            "price": display_price(snapshot["consultation_amount_rub"] * 100),
             "consultation_discount": (
                 snapshot["consultation_regular_rub"] - snapshot["consultation_amount_rub"]
             )
@@ -1788,9 +1800,9 @@ def notify_funnel(app, owner, id, event):
         if snapshot.get("contact_url"):
             buttons.append(
                 (
-                    followup.get("support_label", "💬 Написать Марине"),
-                    "url",
-                    {"url": snapshot["contact_url"]},
+                    followup.get("support_label", labels.get("support", "💬 Написать Марине")),
+                    "funnel_contact" if journey else "url",
+                    values if journey else {"url": snapshot["contact_url"]},
                 )
             )
         bot.send(render_copy(followup["text"], snapshot, account["name"], **copy_values), buttons)
@@ -1804,6 +1816,10 @@ def notify_funnel(app, owner, id, event):
             "sendDocument",
         )
     elif event.startswith("funnel.invoice."):
+        from .consultation_journey import order_payment_label
+
+        with connect(app.config["DATABASE"]) as db:
+            caption = order_payment_label(db, order)
         lava_checkout = attempt["data"]["provider"] == "lava"
         bot.send(
             (
@@ -1811,5 +1827,5 @@ def notify_funnel(app, owner, id, event):
                 if lava_checkout
                 else "Счёт готов. Оплатите в Telegram Stars:"
             ),
-            [("💳 Оплатить", "url", {"url": attempt["data"]["url"]})],
+            [(caption, "url", {"url": attempt["data"]["url"]})],
         )

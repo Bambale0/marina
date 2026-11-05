@@ -77,6 +77,27 @@ for group, b in zip(
         .split("\nЭто на возраст", 1)[0]
         .strip()
     )
+
+    def button_label(value):
+        return re.sub(r"\d[\d \u00a0\u202f]*(?:[,.]\d{2})?\s*₽", "{price}", " ".join(value.split()))
+
+    desc_buttons = re.findall(r"^\[Кнопка\]: (.+)$", b[: b.index("ТИП 2.")], re.M)
+    info_label = button_label(re.search(r"\[(📋.*?)\]", b, re.S)[1])
+    target_label = button_label(re.search(r"ТИП 2\..*?\[(.*?)\]", b, re.S)[1].split(" / ")[0])
+    support_label = button_label(re.search(r"ТИП 3\..*?\[(💬.*?)\]", b, re.S)[1])
+    labels = {
+        "info": info_label,
+        "book_promo": button_label(desc_buttons[0]),
+        "book_regular": "📅 Записаться на диагностику",
+        "book_target": target_label,
+        "contact": desc_buttons[1],
+        "support": support_label,
+        "contact_open": re.search(r"\[Кнопка\]: (👩[^\n]+)", b)[1]
+        .rstrip("»*")
+        .replace("[Ваше Имя]", "Марине"),
+        "pay": button_label(re.search(r"\[Кнопка\]: (💳[^\n]+)", payment)[1]),
+        "back": re.search(r"\[Кнопка\]: (❌[^\n]+)", payment)[1],
+    }
     config["ages"][group] = {
         "version": "remainder-20261105",
         "description": desc,
@@ -87,7 +108,8 @@ for group, b in zip(
         "preparation_filename": filename,
         "preparation_material_id": "",
         "contact_text": contact.replace("{имя}", "{name}"),
-        "contact_prefill": prefill,
+        "contact_prefill": " ".join(prefill.split()),
+        "buttons": labels,
         "payment_timing": "after_scheduling",
         "requested_payment_timing": "before_scheduling",
     }
@@ -125,6 +147,7 @@ for key, label, price, part in zip(
         "text": text,
         "amount_rub": price,
         "booking_label": re.search(r"\[Кнопка\]: (.+)", part)[1].replace("1 900 ₽", "{price}"),
+        "contact_label": re.findall(r"\[Кнопка\]: (.+)", part)[1],
         "gift_text": ("🎁 Бесплатная польза" + gift)
         .replace("[Файл чек-листа прикрепляется прямо в чат]", "")
         .strip()

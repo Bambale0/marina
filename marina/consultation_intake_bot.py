@@ -1,7 +1,7 @@
 """Three-question Telegram forms and personal-contact routes."""
 
 from . import require
-from .consultation_journey import contact_url
+from .consultation_journey import contact_url, button_text, display_price
 from .db import uid
 
 
@@ -18,7 +18,13 @@ def show_question(bot):
             )
             for o in q["options"]
         ]
-        + [("❌ Назад к описанию", "funnel_consultation", {"id": draft["run_id"]})],
+        + [
+            (
+                button_text(draft["journey"], "back", "", "❌ Назад к описанию"),
+                "funnel_consultation",
+                {"id": draft["run_id"]},
+            )
+        ],
     )
 
 
@@ -100,7 +106,7 @@ def handle_action(bot, action, d):
             j["contact_text"].replace("{name}", bot.user.get("first_name", "Здравствуйте")),
             [
                 (
-                    "👩‍⚕️ Написать Марине в личные сообщения",
+                    button_text(j, "contact_open", "", "👩‍⚕️ Написать Марине в личные сообщения"),
                     "url",
                     {"url": contact_url(details["contact_url"], j.get("contact_prefill", ""))},
                 )
@@ -119,7 +125,7 @@ def handle_action(bot, action, d):
         require(d.get("route") in c["routes"], "Выберите категорию")
         bot.state_set(lead_type=d["route"])
         r = c["routes"][d["route"]]
-        price = str(r["amount_rub"]) + " ₽"
+        price = display_price(r["amount_rub"] * 100)
         bot.send(
             r["text"].replace("{price}", price),
             [
@@ -129,7 +135,7 @@ def handle_action(bot, action, d):
                     {"route": d["route"], "action": "booking"},
                 ),
                 (
-                    "💬 Задать вопрос лично специалисту",
+                    r.get("contact_label", "💬 Задать вопрос лично специалисту"),
                     "outside_interest",
                     {"route": d["route"], "action": "contact"},
                 ),

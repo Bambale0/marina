@@ -2,7 +2,7 @@
 
 import re
 
-from . import require
+from . import require, object_get
 from .db import connect
 from .funnel import AGES, published, render_copy
 
@@ -48,13 +48,20 @@ def show_checkout(bot, attempt):
         bot.send("Готовлю счёт. Ссылка появится в этом чате.")
         return
     lava_checkout = attempt["data"]["provider"] == "lava"
+    caption = "💳 Оплатить"
+    if attempt["data"].get("order_id"):
+        from .consultation_journey import order_payment_label
+
+        with connect(bot.app.config["DATABASE"]) as db:
+            order = object_get(db, attempt["data"]["order_id"], "order", bot.owner)
+            caption = order_payment_label(db, order)
     bot.send(
         (
             "Счёт готов. Оплатите на защищённой странице Lava.top:"
             if lava_checkout
             else "Счёт готов. Оплатите в Telegram Stars:"
         ),
-        [("💳 Оплатить", "url", {"url": attempt["data"]["url"]})],
+        [(caption, "url", {"url": attempt["data"]["url"]})],
     )
 
 
@@ -140,9 +147,10 @@ def handle_action(bot, action, d):
         response = bot.client.get("/api/funnel-runs/" + d["id"] + "/consultation-journey")
         if response.status_code == 200:
             details = response.json
-            from .funnel import price_text
+            from .consultation_journey import button_text, display_price
 
-            price = price_text({"data": {"amount": details["amount_rub"] * 100, "currency": "RUB"}})
+            journey = details["journey"]
+            price = display_price(details["amount_rub"] * 100)
             footer = (
                 "Стоимость по промокоду " + details["code"] + ": "
                 if details["eligible"]
@@ -152,8 +160,23 @@ def handle_action(bot, action, d):
             bot.send(
                 details["journey"]["description"] + "\n\n💳 " + footer,
                 [
-                    ("📅 Записаться на диагностику", "intake_start", {"id": d["id"]}),
-                    ("💬 Задать вопрос лично специалисту", "funnel_contact", {"id": d["id"]}),
+                    (
+                        button_text(
+                            journey,
+                            "book_promo" if details["eligible"] else "book_regular",
+                            price,
+                            "📅 Записаться на диагностику",
+                        ),
+                        "intake_start",
+                        {"id": d["id"]},
+                    ),
+                    (
+                        button_text(
+                            journey, "contact", price, "💬 Задать вопрос лично специалисту"
+                        ),
+                        "funnel_contact",
+                        {"id": d["id"]},
+                    ),
                 ],
             )
             return True
