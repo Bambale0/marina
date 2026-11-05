@@ -1679,38 +1679,53 @@ async function adminObjects(offset = 0) {
       ["", "Любое состояние"],
       ...Object.entries(states),
     ]);
-  const list = el("div", { class: "stack" });
+  const list = el("div", {
+    class: "stack", "data-object-list": "true", "aria-busy": "false",
+  });
+  let loadVersion = 0;
   const load = async (page = 0) => {
-    const data = await api(
-      "/admin/objects?kind=" +
-        encodeURIComponent(kind.get()) +
-        "&status=" +
-        encodeURIComponent(status.get()) +
-        "&offset=" +
-        page,
-    );
-    list.replaceChildren(
-      ...data.items.map((o) =>
-        el(
-          "article",
-          { class: "card" },
-          el("h3", {}, o.data.title || o.data.name || kinds[o.kind] || o.kind),
-          badge(o.status),
-          el("p", { class: "quiet" }, dateTime(o.updated)),
-          button("Открыть карточку", () => adminCard(o.id), true),
+    const version = ++loadVersion;
+    list.setAttribute("aria-busy", "true");
+    list.replaceChildren(empty("Загрузка объектов…"));
+    try {
+      const data = await api(
+        "/admin/objects?kind=" +
+          encodeURIComponent(kind.get()) +
+          "&status=" +
+          encodeURIComponent(status.get()) +
+          "&offset=" +
+          page,
+      );
+      if (version !== loadVersion) return;
+      list.replaceChildren(
+        ...data.items.map((o) =>
+          el(
+            "article",
+            { class: "card", "data-object-id": o.id },
+            el("h3", {}, o.data.title || o.data.name || kinds[o.kind] || o.kind),
+            badge(o.status),
+            el("p", { class: "quiet" }, dateTime(o.updated)),
+            button("Открыть карточку", () => adminCard(o.id), true),
+          ),
         ),
-      ),
-      el(
-        "div",
-        { class: "row" },
-        page > 0
-          ? button("Назад", () => load(Math.max(0, page - 100)), true)
-          : null,
-        data.items.length === 100
-          ? button("Далее", () => load(page + 100), true)
-          : null,
-      ),
-    );
+        el(
+          "div",
+          { class: "row" },
+          page > 0
+            ? button("Назад", () => load(Math.max(0, page - 100)), true)
+            : null,
+          data.items.length === 100
+            ? button("Далее", () => load(page + 100), true)
+            : null,
+        ),
+      );
+    } catch (error) {
+      if (version !== loadVersion) return;
+      list.replaceChildren(empty("Не удалось загрузить объекты. Повторите выбор фильтра."));
+      throw error;
+    } finally {
+      if (version === loadVersion) list.setAttribute("aria-busy", "false");
+    }
   };
   kind.input.onchange = () => safe(() => load());
   status.input.onchange = () => safe(() => load());
