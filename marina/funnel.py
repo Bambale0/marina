@@ -1775,6 +1775,14 @@ def notify_funnel(app, owner, id, event):
             d["consultation_expires"], ZoneInfo(snapshot["timezone"])
         ).strftime("%d.%m.%Y в %H:%M")
         followup = next(f for f in snapshot["followups"] if f["hours"] == hours)
+        if labels and not snapshot.get("consultation_journey", {}).get("buttons"):
+            followup = {
+                **followup,
+                "button_label": labels[
+                    "book_target" if followup.get("button_action") == "book" else "info"
+                ],
+                "support_label": labels["support"],
+            }
         copy_values = {
             "deadline": deadline,
             "consultation_price": str(snapshot["consultation_amount_rub"]) + " ₽",

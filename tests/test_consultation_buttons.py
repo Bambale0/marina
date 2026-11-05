@@ -188,3 +188,25 @@ def test_ready_invoice_and_repeat_link_keep_author_caption(app, coupon):
     bot = Bot(app, {"id": 2, "first_name": "Buyer"}, 2, "ready-repeat")
     show_checkout(bot, repeated)
     assert labels(messages(calls)[-1])[0]["text"] == expected
+
+
+def test_pending_legacy_followup_uses_new_labels_without_mutating_saved_terms(app):
+    _, owner, run, _, sent, _, j = journey_sale(app, coupon=True, book=False)
+    with transaction(app.config["DATABASE"]) as db:
+        d = json.loads(
+            db.execute("SELECT data FROM objects WHERE id=?", (run["id"],)).fetchone()[0]
+        )
+        d["snapshot"]["consultation_journey"].pop("buttons")
+        d["snapshot"]["followups"][0].update(
+            button_label="Старое общее название", support_label="Старый вопрос"
+        )
+        old = json.dumps(d)
+        db.execute("UPDATE objects SET data=? WHERE id=?", (old, run["id"]))
+    current = owner.get("/api/funnel-runs/" + run["id"]).json
+    app.clock[0] = current["data"]["guide_delivered_at"] + 24 * 3600
+    notify_funnel(app, run["owner"], run["id"], "funnel.followup.24")
+    buttons = labels(sent[-1][1])
+    assert buttons[0]["text"] == j["buttons"]["info"]
+    assert buttons[1]["text"] == j["buttons"]["support"]
+    with connect(app.config["DATABASE"]) as db:
+        assert db.execute("SELECT data FROM objects WHERE id=?", (run["id"],)).fetchone()[0] == old
