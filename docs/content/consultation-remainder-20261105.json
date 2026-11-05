@@ -348,7 +348,6 @@
         "material_id": "",
         "material_filename": "Чек-лист: Моторные вехи ребенка от 0 до 3 лет (Сенсорный календарь).pdf",
         "required_videos": 3,
-        "max_video_seconds": 60,
         "response_hours": 24
       },
       "teen_senior": {

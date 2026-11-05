@@ -244,13 +244,12 @@ def validate_routes(db, d):
     baby = rs["baby_0_2"]
     require(
         all(
-            type(baby.get(k)) is int and baby[k] > 0
-            for k in ("required_videos", "max_video_seconds", "response_hours")
+            type(baby.get(k)) is int and baby[k] > 0 for k in ("required_videos", "response_hours")
         ),
-        "Укажите количество видео, длительность и срок разбора",
+        "Укажите количество видео и срок разбора",
     )
     require(
-        baby["required_videos"] <= 6 and baby["max_video_seconds"] <= 600,
+        baby["required_videos"] <= 6,
         "Проверьте ограничения задания",
     )
 
@@ -275,6 +274,7 @@ def register_consultation_journey(app):
         )
         for k in ("approval", "previous_version", "configuration_release"):
             data.pop(k, None)
+        data.get("routes", {}).get("baby_0_2", {}).pop("max_video_seconds", None)
         return data
 
     @app.get("/api/funnel-runs/<id>/consultation-journey")

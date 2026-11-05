@@ -1043,7 +1043,7 @@ async function clientCard(o) {
       const uploaded=new Set(d.videos.map(v=>v.slot));
       card.append(el("p",{},"Получено видео: "+uploaded.size+" из "+d.rules.required_videos));
       for(let slot=1;slot<=d.rules.required_videos;slot++) if(!uploaded.has(slot)) {
-        const f=field("Видео выполнения пункта "+slot+" (MP4, до "+d.rules.max_video_seconds+" секунд)","file");
+        const f=field("Видео выполнения пункта "+slot+" (MP4)","file");
         card.append(form("Пункт "+slot,[f],"Сохранить видео",async()=>{
           if(!f.input.files[0]) throw new Error("Выберите видео");
           const data=new FormData();data.append("slot",String(slot));data.append("file",f.input.files[0]);

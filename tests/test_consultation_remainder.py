@@ -366,7 +366,7 @@ def test_parent_video_task_in_real_browser(app, tmp_path):
             ).to_be_visible()
             for slot in range(1, 4):
                 page.get_by_label(
-                    "Видео выполнения пункта " + str(slot) + " (MP4, до 60 секунд)", exact=True
+                    "Видео выполнения пункта " + str(slot) + " (MP4)", exact=True
                 ).set_input_files(str(path))
                 page.get_by_role("heading", name="Пункт " + str(slot), exact=True).locator(
                     ".."

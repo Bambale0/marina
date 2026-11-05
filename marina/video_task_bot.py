@@ -58,9 +58,7 @@ def handle_action(bot, action, d):
         bot.send(
             "Пришлите видео выполнения пункта "
             + str(d["slot"])
-            + " одним сообщением: MP4 до "
-            + str(task["data"]["rules"]["max_video_seconds"])
-            + " секунд. Видео увидит специалист."
+            + " одним сообщением: MP4. Ограничения по длительности нет. Видео увидит специалист."
         )
     elif action == "video_task_submit":
         bot.api("/video-tasks/" + d["id"] + "/submit", "POST", {})

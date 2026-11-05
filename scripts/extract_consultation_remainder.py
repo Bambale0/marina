@@ -158,9 +158,8 @@ for key, label, price, part in zip(
         if gift
         else "",
     }
-config["outside"]["routes"]["baby_0_2"].update(
-    required_videos=3, max_video_seconds=60, response_hours=24
-)
+# Owner clarification, 2026-11-05: do not restrict the duration of parent videos.
+config["outside"]["routes"]["baby_0_2"].update(required_videos=3, response_hours=24)
 Path(args.output).parent.mkdir(parents=True, exist_ok=True)
 Path(args.output).write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
 print("Four author journeys and three routes extracted")
