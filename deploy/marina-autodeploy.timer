@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a verified Marina develop release
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=20s
+Unit=marina-autodeploy.service
+
+[Install]
+WantedBy=timers.target

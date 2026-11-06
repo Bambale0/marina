@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy Marina develop after successful GitHub Checks
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/marina/autodeploy.py
+TimeoutStartSec=25min
+UMask=0077
