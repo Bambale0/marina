@@ -31,6 +31,7 @@ PY
 fi
 if [ -x /usr/bin/redis-server ]; then
   install -d -o marina -g marina -m 0700 /var/lib/marina/redis
+  install -o root -g marina -m 0640 "$release_dir/deploy/redis.conf" /etc/marina-redis.conf
 fi
 for unit in "$release_dir"/deploy/marina-*; do
   install -m 0644 "$unit" /etc/systemd/system/
@@ -40,6 +41,11 @@ mv -Tf /opt/marina/current.next /opt/marina/current
 systemctl daemon-reload
 if [ -x /usr/bin/redis-server ]; then
   systemctl enable --now marina-redis
+  for attempt in {1..50}; do
+    if redis-cli -s /var/lib/marina/redis/redis.sock PING >/dev/null 2>&1; then break; fi
+    sleep 0.1
+  done
+  redis-cli -s /var/lib/marina/redis/redis.sock PING >/dev/null
 fi
 systemctl restart marina-web marina-poll marina-worker
 systemctl enable marina-backup.timer
