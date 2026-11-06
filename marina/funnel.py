@@ -1453,6 +1453,15 @@ def apply_profile_job(app, owner, id):
             )
 
 
+def followup_times(app, account, snapshot, delivered_at):
+    """Admin previews use 15-minute steps; client snapshot hours stay unchanged."""
+    admin = account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"]
+    return {
+        str(f["hours"]): delivered_at + (index * 900 if admin else f["hours"] * 3600)
+        for index, f in enumerate(snapshot["followups"], 1)
+    }
+
+
 def notify_funnel(app, owner, id, event):
     """Recheck state at delivery, so cancellation also wins over queued retries."""
     from .bot import Bot, send_file
@@ -1759,6 +1768,7 @@ def notify_funnel(app, owner, id, event):
             if current["data"].get("guide_delivered_at"):
                 return
             delivered_at = current["data"]["guide_file_sent_at"]
+            due_times = followup_times(app, account, snapshot, delivered_at)
             completed_at = int(app.config["CLOCK"]())
             current = update(
                 db,
@@ -1767,6 +1777,7 @@ def notify_funnel(app, owner, id, event):
                 {
                     **current["data"],
                     "guide_delivered_at": delivered_at,
+                    "followup_due_at": due_times,
                     "consultation_expires": delivered_at
                     + snapshot["consultation_valid_days"] * 86400,
                 },
@@ -1779,14 +1790,17 @@ def notify_funnel(app, owner, id, event):
                         db,
                         current,
                         "funnel.followup." + str(f["hours"]),
-                        delivered_at + f["hours"] * 3600,
+                        due_times[str(f["hours"])],
                     )
     elif event.startswith("funnel.followup"):
         hours = int(event.rsplit(".", 1)[-1])
-        # Do not send obsolete countdowns after downtime.
-        if now >= d["consultation_expires"] or (
-            hours < 72 and now >= d["guide_delivered_at"] + (hours + 24) * 3600
-        ):
+        # Use the persisted schedule, including admin previews, after downtime.
+        due_times = d.get("followup_due_at") or {
+            str(f["hours"]): d["guide_delivered_at"] + f["hours"] * 3600
+            for f in snapshot["followups"]
+        }
+        next_due = due_times.get(str(hours + 24), d["consultation_expires"])
+        if now >= min(d["consultation_expires"], next_due):
             return
         deadline = datetime.fromtimestamp(
             d["consultation_expires"], ZoneInfo(snapshot["timezone"])

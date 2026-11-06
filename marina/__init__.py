@@ -3,7 +3,6 @@ import hashlib
 import hmac
 import json
 import os
-import secrets
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -13,6 +12,7 @@ from flask import Flask, g, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from .db import SCHEMA, audit, connect, insert, transaction, uid, unpack, update
+from . import sessions
 
 
 class Problem(Exception):
@@ -64,10 +64,7 @@ def protected(admin=False):
             token = request.headers.get("Authorization", "").removeprefix("Bearer ")
             digest = hashlib.sha256(token.encode()).hexdigest()
             with transaction(g.app.config["DATABASE"]) as db:
-                account = db.execute(
-                    "SELECT a.* FROM sessions s JOIN accounts a ON a.id=s.account_id WHERE s.digest=? AND s.revoked=0 AND s.expires>?",
-                    (digest, g.now),
-                ).fetchone()
+                account = sessions.account(db, g.app, digest, g.now)
                 require(account, "Войдите через Telegram", 401)
                 g.actor = dict(account)
                 require(not account["blocked"], "Доступ ограничен", 403)
@@ -142,6 +139,7 @@ def create_app(config=None):
         CLOCK=time.time,
         MAX_CONTENT_LENGTH=20 * 1024 * 1024,
         SESSION_TTL=12 * 3600,
+        REDIS_URL=os.getenv("REDIS_URL", ""),
         PUBLIC_URL=os.getenv("PUBLIC_URL", ""),
         TELEGRAM_WEBHOOK_SECRET=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
         ENABLED_PAYMENT_PROVIDERS=[
@@ -155,6 +153,7 @@ def create_app(config=None):
     )
     if config:
         app.config.update(config)
+    sessions.configure(app)
     if os.getenv("TRUST_PROXY") == "1":
         from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -275,15 +274,7 @@ def create_app(config=None):
                 )
                 row = db.execute("SELECT * FROM accounts WHERE id=?", (id,)).fetchone()
             require(not row["blocked"], "Доступ ограничен", 403)
-            token = secrets.token_urlsafe(32)
-            db.execute(
-                "INSERT INTO sessions VALUES(?,?,?,0)",
-                (
-                    hashlib.sha256(token.encode()).hexdigest(),
-                    row["id"],
-                    g.now + app.config["SESSION_TTL"],
-                ),
-            )
+            token = sessions.issue(db, app, row["id"], g.now, app.config["SESSION_TTL"])
             wanted_role = "admin" if tg_id in app.config["ADMIN_TELEGRAM_IDS"] else "client"
             if row["role"] != wanted_role:
                 db.execute("UPDATE accounts SET role=? WHERE id=?", (wanted_role, row["id"]))
@@ -312,15 +303,7 @@ def create_app(config=None):
             ).fetchone()
             require(account and not account["blocked"], "Доступ ограничен", 403)
             db.execute("DELETE FROM login_codes WHERE digest=?", (digest,))
-            token = secrets.token_urlsafe(32)
-            db.execute(
-                "INSERT INTO sessions VALUES(?,?,?,0)",
-                (
-                    hashlib.sha256(token.encode()).hexdigest(),
-                    account["id"],
-                    g.now + app.config["SESSION_TTL"],
-                ),
-            )
+            token = sessions.issue(db, app, account["id"], g.now, app.config["SESSION_TTL"])
             return {"token": token, "account": dict(account)}
 
     @app.post("/api/logout")
@@ -330,6 +313,7 @@ def create_app(config=None):
             request.headers["Authorization"].removeprefix("Bearer ").encode()
         ).hexdigest()
         g.db.execute("UPDATE sessions SET revoked=1 WHERE digest=?", (digest,))
+        sessions.forget(app, digest)
         return {"ok": True}
 
     @app.get("/api/me")
@@ -463,6 +447,7 @@ def create_app(config=None):
             "Нельзя ограничить собственный вход",
         )
         if action == "revoke-sessions":
+            # SQL revocation also rejects stale Redis entries during an outage.
             g.db.execute("UPDATE sessions SET revoked=1 WHERE account_id=?", (id,))
         else:
             g.db.execute("UPDATE accounts SET blocked=? WHERE id=?", (int(action == "block"), id))
