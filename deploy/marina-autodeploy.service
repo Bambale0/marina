@@ -8,4 +8,4 @@ Type=oneshot
 User=root
 ExecStart=/usr/bin/python3 /opt/marina/autodeploy.py
 TimeoutStartSec=25min
-UMask=0077
+UMask=0022

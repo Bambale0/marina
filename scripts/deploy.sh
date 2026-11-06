@@ -1,5 +1,8 @@
 #!/bin/bash
 set -euo pipefail
+# Release code is public; the marina service user must traverse and execute its venv.
+# Private database backups and manifests set their own restrictive file modes.
+umask 0022
 # Install a reviewed commit as an immutable local preview. Does not touch main.
 exec 9>/run/lock/marina-deploy.lock
 flock -n 9 || { echo 'Another Marina deployment is running.' >&2; exit 1; }
@@ -51,6 +54,8 @@ git archive "$release_sha" | tar -x -C "$release_dir"
 python3 -m virtualenv "$release_dir/.venv"
 "$release_dir/.venv/bin/pip" install -r "$release_dir/requirements.lock"
 cd "$release_dir"
+runuser -u marina -- test -x "$release_dir/.venv/bin/gunicorn"
+runuser -u marina -- "$release_dir/.venv/bin/python" -c 'import flask, marina, redis'
 if [ -d "$previous_release" ]; then
   systemctl stop marina-web marina-poll marina-worker
   services_stopped=1
