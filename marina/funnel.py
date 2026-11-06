@@ -286,8 +286,8 @@ def material_asset(db, material_id, mimes=("application/pdf",)):
     return obj, row
 
 
-def owned_guide(db, owner, group, admin=False):
-    """An active entitlement suppresses repeat sales of this age-family guide."""
+def owned_guide(db, owner, group, admin=False, run_id=None):
+    """Keep client purchases reusable; admin previews buy once per screening run."""
     rows = db.execute(
         "SELECT * FROM objects WHERE kind='right' AND owner=? AND status='active' "
         "AND json_extract(data,'$.service')='guide' "
@@ -297,6 +297,8 @@ def owned_guide(db, owner, group, admin=False):
     )
     for row in rows:
         right = unpack(row)
+        if admin and right["data"].get("run_id") != run_id:
+            continue
         if right["data"].get("access_source") != "admin" or admin:
             return right
     return None
@@ -364,7 +366,11 @@ def public_run(obj):
     d = obj["data"]
     if obj["status"] == "completed" and "snapshot" in d:
         prior = owned_guide(
-            g.db, obj["owner"], d.get("child_age"), admin=g.actor["role"] == "admin"
+            g.db,
+            obj["owner"],
+            d.get("child_age"),
+            admin=g.actor["role"] == "admin",
+            run_id=obj["id"],
         )
         from .consultation_journey import journey_for
 
@@ -703,7 +709,11 @@ def register_funnel(app):
                 "age_selected",
             )
         if obj["data"].get("owned_guide_id") and not owned_guide(
-            g.db, g.actor["id"], obj["data"].get("child_age"), admin=g.actor["role"] == "admin"
+            g.db,
+            g.actor["id"],
+            obj["data"].get("child_age"),
+            admin=g.actor["role"] == "admin",
+            run_id=obj["id"],
         ):
             data = dict(obj["data"])
             data.pop("owned_guide_id", None)
@@ -973,7 +983,7 @@ def register_funnel(app):
         admin = g.actor["role"] == "admin"
         obj = object_get(g.db, id, "funnel_run", g.actor["id"])
         require(obj["status"] == "completed", "Сначала завершите скрининг")
-        prior = owned_guide(g.db, g.actor["id"], obj["data"]["child_age"], admin=admin)
+        prior = owned_guide(g.db, g.actor["id"], obj["data"]["child_age"], admin=admin, run_id=id)
         if prior:
             existing = object_get(g.db, prior["data"]["order_id"], "order", g.actor["id"])
             return {**existing, "existing_guide_right_id": prior["id"]}
@@ -1503,6 +1513,7 @@ def notify_funnel(app, owner, id, event):
                 owner,
                 d.get("child_age"),
                 admin=account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"],
+                run_id=id,
             )
         if event in ("funnel.offer", "funnel.cart.first", "funnel.cart.last"):
             prior_guide = owned_guide(
@@ -1510,6 +1521,7 @@ def notify_funnel(app, owner, id, event):
                 owner,
                 d.get("child_age"),
                 admin=account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"],
+                run_id=id,
             )
             if prior_guide and event.startswith("funnel.cart"):
                 return

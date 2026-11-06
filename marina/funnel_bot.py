@@ -197,12 +197,8 @@ def handle_action(bot, action, d):
         if not bot.privacy_gate("funnel_buy", {"id": d["id"]}):
             return True
         order = bot.api("/funnel-runs/" + d["id"] + "/purchase", "POST", {})
-        if order.get("existing_guide_right_id"):
-            bot.send(
-                "Доступ открыт. Файл будет доставлен в этот чат."
-                if order["data"].get("access_source") == "admin"
-                else "Руководство уже оплачено. Отправляю ваш файл."
-            )
+        if order.get("existing_guide_right_id") and order["data"].get("access_source") != "admin":
+            bot.send("Руководство уже оплачено. Отправляю ваш файл.")
             return handle_action(
                 bot, "funnel_owned", {"right_id": order["existing_guide_right_id"]}
             )
