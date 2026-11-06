@@ -21,6 +21,7 @@ if [ ! -f /etc/marina.env ]; then
 fi
 services_stopped=0
 activated=0
+release_created=0
 recover() {
   status=$?
   if [ "$status" -ne 0 ]; then
@@ -31,11 +32,21 @@ recover() {
     if [ "$services_stopped" -eq 1 ]; then
       systemctl start marina-web marina-poll marina-worker || true
     fi
+    # Only discard the fresh code directory made by this attempt, never live data.
+    if [ "$release_created" -eq 1 ] && [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]] \
+       && [ "$release_dir" = "/opt/marina/releases/$release_sha" ] \
+       && [ "$(realpath /opt/marina/current 2>/dev/null || true)" != "$release_dir" ]; then
+      if [ -L /opt/marina/current.next ] && [ "$(realpath /opt/marina/current.next)" = "$release_dir" ]; then
+        unlink /opt/marina/current.next
+      fi
+      rm -rf -- "$release_dir"
+    fi
   fi
   exit "$status"
 }
 trap recover EXIT
 install -d -m 0755 "$release_dir"
+release_created=1
 git archive "$release_sha" | tar -x -C "$release_dir"
 python3 -m virtualenv "$release_dir/.venv"
 "$release_dir/.venv/bin/pip" install -r "$release_dir/requirements.lock"

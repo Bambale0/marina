@@ -31,5 +31,6 @@ jobs:
         timeout-minutes: 5
       - run: python -m pytest -q
       - run: python -m compileall -q marina
+      - run: bash -n scripts/deploy.sh
       - run: ruff check marina
       - run: ruff format --check marina tests
