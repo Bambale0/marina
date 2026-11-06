@@ -1136,7 +1136,9 @@ class Bot:
                 return
             self.profile_menu()
         elif action in ("consent", "marketing_choice"):
-            if action == "consent":
+            # Previously sent marketing buttons inherited action='consent'.
+            # Their explicit boolean choice must still work after the update.
+            if action == "consent" and type(d.get("accepted")) is not bool:
                 self.api(
                     "/consents",
                     "POST",

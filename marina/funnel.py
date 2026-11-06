@@ -1732,12 +1732,17 @@ def notify_funnel(app, owner, id, event):
             if dev_delivery:
                 message = "Тестовый PDF готов. Оплата не выполнялась."
             elif right["data"].get("access_source") == "admin":
-                message = (
-                    "Руководство доступно без оплаты. PDF будет отправлен следующим сообщением."
+                # Keep the author's age-specific delivery copy for admin previews,
+                # replacing only the payment acknowledgement that does not apply.
+                message = "Руководство доступно без оплаты.\n\n" + re.sub(
+                    r"^Оплата прошла успешно[!.]?\s*(?:🎉\s*)?",
+                    "",
+                    render_copy(snapshot["success_text"], snapshot, account["name"]),
+                    count=1,
                 )
             else:
                 message = render_copy(snapshot["success_text"], snapshot, account["name"])
-            bot.send(message, consult)
+            bot.send(message)
             with transaction(app.config["DATABASE"]) as db:
                 current = object_get(db, id)
                 update(db, current, now, {**current["data"], "guide_success_sent_at": now})
