@@ -13,7 +13,7 @@ const el = (tag, attrs = {}, ...children) => {
       n.append(c instanceof Node ? c : document.createTextNode(String(c)));
   return n;
 };
-let token = sessionStorage.getItem("marina-token"),
+let token = localStorage.getItem("marina-token") || sessionStorage.getItem("marina-token"),
   me,
   current,
   selected = sessionStorage.getItem("subject");
@@ -121,6 +121,8 @@ async function api(path, method = "GET", data) {
   if (!r.ok) {
     if (r.status === 401 && !path.startsWith("/auth/")) {
       token = null;
+      localStorage.removeItem("marina-token");
+      localStorage.removeItem("marina-user");
       sessionStorage.removeItem("marina-token");
       setTimeout(() => location.reload(), 0);
     }
@@ -272,6 +274,8 @@ async function refresh() {
       "Выйти",
       async () => {
         await api("/logout", "POST", {});
+        localStorage.removeItem("marina-token");
+        localStorage.removeItem("marina-user");
         sessionStorage.removeItem("marina-token");
         location.reload();
       },
@@ -1171,12 +1175,28 @@ async function clientCard(o) {
 }
 safe(async () => {
   const webapp = window.Telegram?.WebApp;
+  if (webapp?.initData && token) {
+    // This client hint only discards a cached token; the server verifies login.
+    let telegramId;
+    try {
+      telegramId = JSON.parse(new URLSearchParams(webapp.initData).get("user"))?.id;
+    } catch (_) {
+      telegramId = null;
+    }
+    if (!telegramId || localStorage.getItem("marina-user") !== String(telegramId)) {
+      token = null;
+      localStorage.removeItem("marina-token");
+      localStorage.removeItem("marina-user");
+      sessionStorage.removeItem("marina-token");
+    }
+  }
   if (webapp?.initData && !token) {
     const auth = await api("/auth/telegram", "POST", {
       init_data: webapp.initData,
     });
     token = auth.token;
-    sessionStorage.setItem("marina-token", token);
+    localStorage.setItem("marina-token", token);
+    localStorage.setItem("marina-user", String(auth.account.telegram_id));
     webapp.ready();
     webapp.expand();
   }
@@ -1194,7 +1214,8 @@ if (!token) {
       form("Вход по коду", [code], "Войти", async () => {
         const auth = await api("/auth/code", "POST", { code: code.get() });
         token = auth.token;
-        sessionStorage.setItem("marina-token", token);
+        localStorage.setItem("marina-token", token);
+        localStorage.setItem("marina-user", String(auth.account.telegram_id));
         await refresh();
         await initialPage();
       }),
@@ -1281,4 +1302,9 @@ async function dataPage() {
       ),
     ),
   );
+}
+
+if (token) {
+  localStorage.setItem("marina-token", token);
+  sessionStorage.removeItem("marina-token");
 }

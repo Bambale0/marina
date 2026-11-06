@@ -29,12 +29,18 @@ backup('/var/lib/marina/marina.sqlite',target)
 print('Pre-deployment backup verified')
 PY
 fi
+if [ -x /usr/bin/redis-server ]; then
+  install -d -o marina -g marina -m 0700 /var/lib/marina/redis
+fi
 for unit in "$release_dir"/deploy/marina-*; do
   install -m 0644 "$unit" /etc/systemd/system/
 done
 ln -s "$release_dir" /opt/marina/current.next
 mv -Tf /opt/marina/current.next /opt/marina/current
 systemctl daemon-reload
+if [ -x /usr/bin/redis-server ]; then
+  systemctl enable --now marina-redis
+fi
 systemctl restart marina-web marina-poll marina-worker
 systemctl enable marina-backup.timer
 printf '%s\n' "$release_sha" > /var/lib/marina/deployed-commit

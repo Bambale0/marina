@@ -1,6 +1,5 @@
 """Telegram polling adapter. Only verified getUpdates data reaches trusted_client."""
 
-import hashlib
 import io
 import json
 import secrets
@@ -11,6 +10,7 @@ from urllib.request import Request, urlopen
 from . import Problem, age_months, object_get, require
 from .db import audit, connect, insert, transaction, uid, unpack, update
 from .providers import telegram
+from . import sessions
 from .onboarding import AGE_GROUPS, screen
 from .intro_activities import ACTIVITY_INTRO
 
@@ -109,11 +109,7 @@ def trusted_client(app, user):
             account_id = row["id"]
             if row["role"] != role:
                 db.execute("UPDATE accounts SET role=? WHERE id=?", (role, account_id))
-        token = secrets.token_urlsafe(32)
-        db.execute(
-            "INSERT INTO sessions VALUES(?,?,?,0)",
-            (hashlib.sha256(token.encode()).hexdigest(), account_id, now + 3600),
-        )
+        token = sessions.issue(db, app, account_id, now, 3600)
         db.execute("DELETE FROM sessions WHERE expires<?", (now,))
     client = app.test_client()
     client.environ_base["HTTP_AUTHORIZATION"] = "Bearer " + token
@@ -189,7 +185,7 @@ class Bot:
                 obj = insert(
                     db,
                     "bot_callback",
-                    {"action": action, **data},
+                    {**data, "action": action},
                     self.now,
                     self.owner,
                     status="active",
@@ -844,6 +840,9 @@ class Bot:
         )
 
     def action(self, action, d):
+        # Recover marketing buttons created before callback action precedence was fixed.
+        if action == "consent" and type(d.get("accepted")) is bool:
+            action = "marketing_choice"
         from .scope import action_service, require_service
 
         service = action_service(action, d)
