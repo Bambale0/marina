@@ -1,6 +1,7 @@
 import pytest
 import shutil
 import subprocess
+import os
 
 from scripts import autodeploy
 from scripts.autodeploy import ci_succeeded
@@ -43,6 +44,7 @@ def test_new_pending_attempt_blocks_an_older_success():
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="Git executable is required")
+@pytest.mark.skipif(os.name == "nt", reason="Linux systemd deployment uses native symlinks")
 def test_real_checkout_waits_for_ci_and_rejects_a_rollback(tmp_path, monkeypatch):
     source, remote, checkout = [tmp_path / name for name in ("source", "remote.git", "checkout")]
 
