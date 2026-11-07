@@ -1481,7 +1481,11 @@ def notify_funnel(app, owner, id, event):
         if event.startswith(("funnel.followup", "funnel.refusal")):
             from .privacy import marketing_allowed
 
-            if not marketing_allowed(db, owner):
+            admin_preview = (
+                event.startswith("funnel.followup.")
+                and account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"]
+            )
+            if not admin_preview and not marketing_allowed(db, owner):
                 return
         d = obj["data"]
         snapshot = d.get("snapshot", {})
@@ -1509,6 +1513,8 @@ def notify_funnel(app, owner, id, event):
         ):
             return
         if event.startswith("funnel.followup"):
+            if event.rsplit(".", 1)[-1] in d.get("followup_sent_at", {}):
+                return
             if not d.get("dev_tripwire_accepted_at"):
                 right = object_get(db, d.get("guide_right_id"), "right", owner)
                 if right["status"] != "active" or (
@@ -1844,7 +1850,28 @@ def notify_funnel(app, owner, id, event):
                     values if journey else {"url": snapshot["contact_url"]},
                 )
             )
-        bot.send(render_copy(followup["text"], snapshot, account["name"], **copy_values), buttons)
+        response = bot.send(
+            render_copy(followup["text"], snapshot, account["name"], **copy_values), buttons
+        )
+        sent_at = int(app.config["CLOCK"]())
+        with transaction(app.config["DATABASE"]) as db:
+            current = object_get(db, id)
+            update(
+                db,
+                current,
+                sent_at,
+                {
+                    **current["data"],
+                    "followup_sent_at": {
+                        **current["data"].get("followup_sent_at", {}),
+                        str(hours): sent_at,
+                    },
+                    "followup_message_ids": {
+                        **current["data"].get("followup_message_ids", {}),
+                        str(hours): (response or {}).get("message_id"),
+                    },
+                },
+            )
     elif event == "funnel.refusal":
         send_file(
             app,

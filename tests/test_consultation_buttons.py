@@ -209,4 +209,9 @@ def test_pending_legacy_followup_uses_new_labels_without_mutating_saved_terms(ap
     assert buttons[0]["text"] == j["buttons"]["info"]
     assert buttons[1]["text"] == j["buttons"]["support"]
     with connect(app.config["DATABASE"]) as db:
-        assert db.execute("SELECT data FROM objects WHERE id=?", (run["id"],)).fetchone()[0] == old
+        saved = json.loads(
+            db.execute("SELECT data FROM objects WHERE id=?", (run["id"],)).fetchone()[0]
+        )
+    assert saved.pop("followup_sent_at") == {"24": app.clock[0]}
+    assert saved.pop("followup_message_ids")["24"] > 0
+    assert saved == json.loads(old)
