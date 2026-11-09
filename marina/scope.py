@@ -24,7 +24,7 @@ def action_service(action, data):
     if (
         action == "outside_interest"
         and data.get("route") == "baby_0_2"
-        and data.get("action") == "booking"
+        and data.get("interest", data.get("action")) == "booking"
     ):
         return "video_task"
     if action == "training":
