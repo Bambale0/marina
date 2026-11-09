@@ -18,13 +18,17 @@ def deliver_route_material(bot, route):
         material = policy["data"]["routes"].get(route, {}) if policy else {}
         if not material_ready(db, material.get("material_id")):
             return
-    choice = {"route": route, "action": "download"}
+    choice = {"route": route, "interest": "download"}
     if not bot.privacy_gate("outside_interest", choice):
         return
     lead = bot.api(
         "/consultation-leads",
         "POST",
-        {**choice, "key": "bot-route-material:" + policy["id"] + ":" + route},
+        {
+            "route": route,
+            "action": "download",
+            "key": "bot-route-material:" + policy["id"] + ":" + route,
+        },
     )
     response = bot.client.get("/api/consultation-leads/" + lead["id"] + "/pdf")
     require(
@@ -174,12 +178,12 @@ def handle_action(bot, action, d):
                 (
                     r["booking_label"].replace("{price}", price),
                     "outside_interest",
-                    {"route": d["route"], "action": "booking"},
+                    {"route": d["route"], "interest": "booking"},
                 ),
                 (
                     r.get("contact_label", "💬 Задать вопрос лично специалисту"),
                     "outside_interest",
-                    {"route": d["route"], "action": "contact"},
+                    {"route": d["route"], "interest": "contact"},
                 ),
                 ("⬅️ Другой возраст", "outside_menu", {}),
             ],
@@ -193,18 +197,25 @@ def handle_action(bot, action, d):
                     (
                         "📄 Получить чек-лист",
                         "outside_interest",
-                        {"route": d["route"], "action": "download"},
+                        {"route": d["route"], "interest": "download"},
                     )
                 ],
             )
     elif action == "outside_interest":
-        if d["action"] == "download":
+        interest = d.get("interest")
+        require(interest in ("contact", "booking", "download"), "Выберите действие")
+        choice = {"route": d["route"], "interest": interest}
+        if interest == "download":
             deliver_route_material(bot, d["route"])
             return True
-        if not bot.privacy_gate("outside_interest", d):
+        if not bot.privacy_gate("outside_interest", choice):
             return True
-        lead = bot.api("/consultation-leads", "POST", {**d, "key": "bot:" + bot.update_id})
-        if d["route"] == "baby_0_2" and d["action"] == "booking":
+        lead = bot.api(
+            "/consultation-leads",
+            "POST",
+            {"route": d["route"], "action": interest, "key": "bot:" + bot.update_id},
+        )
+        if d["route"] == "baby_0_2" and interest == "booking":
             task = bot.api("/video-tasks", "POST", {"lead_id": lead["id"]})
             bot.send(
                 "Заявка на видеоразбор передана специалисту. Специалист даст задание; снимите его выполнение ребёнком. После просмотра вы получите коррекцию выполнения и рекомендации.",
