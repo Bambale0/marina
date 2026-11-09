@@ -182,15 +182,10 @@ class Bot:
                     flush_numbered()
                     rows.append([{"text": title, "url": data["url"]}])
                     continue
-                # Keep callback routing separate from a business payload named
-                # action (for example consultation route booking/contact).
-                # Legacy callbacks without that field retain their stored shape.
-                callback_data = dict(data)
-                callback_data["_callback_action" if "action" in data else "action"] = action
                 obj = insert(
                     db,
                     "bot_callback",
-                    callback_data,
+                    {**data, "action": action},
                     self.now,
                     self.owner,
                     status="active",
@@ -3177,9 +3172,7 @@ def handle_update(app, update):
                 bot.now - obj["created"] < 7 * 24 * 3600,
                 "Кнопка устарела, откройте /start",
             )
-            callback_action = obj["data"].get("_callback_action", obj["data"].get("action"))
-            require(callback_action, "Откройте меню заново")
-            bot.action(callback_action, obj["data"])
+            bot.action(obj["data"]["action"], obj["data"])
         else:
             bot.message(message)
     except Problem as error:
