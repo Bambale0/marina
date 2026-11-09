@@ -113,6 +113,39 @@ def test_age_information_and_outside_contact_labels_come_from_author_source(app)
     assert labels(calls[-1])[0]["text"] == "📹 Заказать видеоразбор малыша (1 900 ₽)"
 
 
+def test_outside_video_order_button_preserves_booking_action(app):
+    route_setup(app)
+    calls = []
+    app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: calls.append(data) or {
+        "ok": True,
+        "result": {"message_id": len(calls)},
+    }
+    bot = Bot(app, {"id": 2, "first_name": "Buyer"}, 2, "outside-booking")
+    bot.action("outside_route", {"route": "baby_0_2"})
+    order = next(
+        message
+        for message in reversed(calls)
+        if labels(message)
+        and labels(message)[0]["text"] == "📹 Заказать видеоразбор малыша (1 900 ₽)"
+    )
+
+    click(app, labels(order)[0], 99001)
+
+    assert any("Заявка на видеоразбор передана специалисту" in d.get("text", "") for d in calls)
+    assert not any(d.get("text") == "Выберите действие" for d in calls)
+    with connect(app.config["DATABASE"]) as db:
+        lead = db.execute(
+            "SELECT data FROM objects WHERE owner=? AND kind='consultation_lead'",
+            (bot.owner,),
+        ).fetchone()
+        task = db.execute(
+            "SELECT data FROM objects WHERE owner=? AND kind='video_task'",
+            (bot.owner,),
+        ).fetchone()
+    assert json.loads(lead[0])["action"] == "booking"
+    assert task
+
+
 @pytest.mark.parametrize(
     "template", ["💳 Оплатить {amount}", "💳 Оплатить 3900 ₽", "💳 Оплатить {price!r}"]
 )
