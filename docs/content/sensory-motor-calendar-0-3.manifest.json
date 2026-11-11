@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "sensory-motor-calendar-0-3",
+  "title": "Сенсорный календарь и моторные вехи: 0–3 года",
+  "source": "Два изображения, предоставленные владельцем 11.11.2026; собранный PDF в отдельном постоянном хранилище",
+  "original_images": [
+    "image_2026-11-11_22-10-25.png",
+    "image_2026-11-11_22-11-00.png"
+  ],
+  "filename": "Sensornyy_kalendar_0-3_goda.pdf",
+  "sha256": "d9d204873941c1aed46e92e84cd3d9b7eea0352a2724cc15343705b9625cc3f9",
+  "bytes": 1997482,
+  "pdf_pages": 2,
+  "page_size": "A4",
+  "pdf_format": "image-only",
+  "age_label": "0-3",
+  "candidate_route": "baby_0_2",
+  "target_policy": "consultation_routes",
+  "publication_state": "not_uploaded_to_server",
+  "author_approval": "not_verified",
+  "content_review": "required_before_publication",
+  "route_material_id": null,
+  "note": "Это описание источника, а не опубликованный материал. PDF не хранится в Git и не привязан к production. Не выставлять material_id, пока не загружен подтверждённый BLOB через штатный admin API."
+}
