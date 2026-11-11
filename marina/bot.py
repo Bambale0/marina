@@ -7,12 +7,11 @@ import time
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from . import Problem, age_months, object_get, require
+from . import Problem, age_months, object_get, require, sessions
 from .db import audit, connect, insert, transaction, uid, unpack, update
-from .providers import telegram
-from . import sessions
-from .onboarding import AGE_GROUPS, screen
 from .intro_activities import ACTIVITY_INTRO
+from .onboarding import AGE_GROUPS, screen
+from .providers import telegram
 
 LEGACY_MENU = [
     ("Пройти скрининг", "welcome", {}),
@@ -858,9 +857,9 @@ class Bot:
                 require_service(db, service)
         from .consultation_bot import handle_action as handle_consultation
         from .consultation_intake_bot import handle_action as handle_intake
-        from .video_task_bot import handle_action as handle_video_task
-        from .specialist_result_bot import handle_action as handle_specialist_result
         from .funnel_bot import handle_action
+        from .specialist_result_bot import handle_action as handle_specialist_result
+        from .video_task_bot import handle_action as handle_video_task
 
         # Publication reads its pending draft before generic navigation clears admin prompts.
         if handle_specialist_result(self, action, d):
