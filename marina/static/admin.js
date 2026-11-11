@@ -15,6 +15,8 @@ const labels = {
   asset_id: "ID файла материала",
   channel_url: "Ссылка на Telegram-канал",
   contact_url: "Личная ссылка Telegram специалиста",
+  group_url: "Ссылка на группу Telegram (policy operations)",
+  specialist_contact_url: "Прямая ссылка специалиста (policy operations)",
   consultation_text: "Описание диагностики",
   consultation_intro_text: "Описание диагностики до покупки / после истечения промокода",
   consultation_valid_days: "Срок действия промокода, дней",
