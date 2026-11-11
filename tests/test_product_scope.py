@@ -1,7 +1,7 @@
 import pytest
 
 from marina import Problem
-from marina.bot import Bot, MENU
+from marina.bot import LEGACY_MENU, MENU, Bot
 from tests.test_identity import app, login
 from tests.test_screening import publish, subject
 from tests.test_commerce import product, policy, quote
@@ -59,8 +59,17 @@ def test_bot_menu_and_old_action_obey_scope(app):
     bot = Bot(app, {"id": 2, "first_name": "Fixture"}, 2, "scope-test")
     bot.send("Меню", MENU)
     labels = [b["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"] for b in row]
-    assert "Занятия" not in labels
-    assert "Консультация" in labels
+    assert labels == [
+        "👥 Вступить в группу",
+        "💬 Связаться со специалистом",
+        "📅 Записаться на онлайн-занятие",
+        "💳 Мой кошелёк",
+    ]
+    # The existing service scope must still apply to the old sections.
+    bot.send("Прежние разделы", LEGACY_MENU)
+    legacy_labels = [b["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"] for b in row]
+    assert "Занятия" not in legacy_labels
+    assert "Консультация" in legacy_labels
     with pytest.raises(Problem):
         bot.action("training", {})
 

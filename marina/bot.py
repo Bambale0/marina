@@ -4,17 +4,16 @@ import io
 import json
 import secrets
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from . import Problem, age_months, object_get, require
+from . import Problem, age_months, object_get, require, sessions
 from .db import audit, connect, insert, transaction, uid, unpack, update
-from .providers import telegram
-from . import sessions
-from .onboarding import AGE_GROUPS, screen
 from .intro_activities import ACTIVITY_INTRO
+from .onboarding import AGE_GROUPS, screen
+from .providers import telegram
 
-MENU = [
+LEGACY_MENU = [
     ("Пройти скрининг", "welcome", {}),
     ("Задание с видео", "video_welcome", {}),
     ("Профили", "profiles", {}),
@@ -25,6 +24,13 @@ MENU = [
     ("Мои обращения", "history", {}),
     ("Оферта", "offer", {}),
     ("Мои данные", "privacy_settings", {}),
+]
+
+MENU = [
+    ("👥 Вступить в группу", "join_group", {}),
+    ("💬 Связаться со специалистом", "contact_specialist", {}),
+    ("📅 Записаться на онлайн-занятие", "online_lesson", {}),
+    ("💳 Мой кошелёк", "wallet", {}),
 ]
 
 ADMIN_CONTENT_KINDS = [
@@ -851,9 +857,9 @@ class Bot:
                 require_service(db, service)
         from .consultation_bot import handle_action as handle_consultation
         from .consultation_intake_bot import handle_action as handle_intake
-        from .video_task_bot import handle_action as handle_video_task
-        from .specialist_result_bot import handle_action as handle_specialist_result
         from .funnel_bot import handle_action
+        from .specialist_result_bot import handle_action as handle_specialist_result
+        from .video_task_bot import handle_action as handle_video_task
 
         # Publication reads its pending draft before generic navigation clears admin prompts.
         if handle_specialist_result(self, action, d):
@@ -1131,6 +1137,77 @@ class Bot:
                 "Нейроразвитие дома\n\nВыберите следующий шаг. Сервис не ставит диагнозы.",
                 MENU,
             )
+        elif action == "services":
+            self.state_set(step=None, onboarding=False)
+            self.send("Дополнительные разделы и прежние сценарии:", LEGACY_MENU)
+        elif action == "join_group":
+            from .commerce import policies
+            from .funnel import published
+
+            with connect(self.app.config["DATABASE"]) as db:
+                operations = policies(db, "operations")
+                funnel = published(db)
+                link = (operations["data"].get("group_url") if operations else None) or (
+                    funnel["data"].get("channel_url") if funnel else None
+                )
+            if (
+                isinstance(link, str)
+                and urlparse(link).scheme == "https"
+                and urlparse(link).hostname == "t.me"
+            ):
+                self.send(
+                    "Откройте наше сообщество в Telegram:",
+                    [("👥 Перейти в группу или канал", "url", {"url": link})],
+                )
+            else:
+                self.send(
+                    "Ссылка на группу пока не настроена специалистом.",
+                    [("В меню", "menu", {})],
+                )
+        elif action == "contact_specialist":
+            from .commerce import policies
+            from .funnel import published
+
+            with connect(self.app.config["DATABASE"]) as db:
+                operations = policies(db, "operations")
+                routes = policies(db, "consultation_routes")
+                funnel = published(db)
+                link = (
+                    (operations["data"].get("specialist_contact_url") if operations else None)
+                    or (funnel["data"].get("contact_url") if funnel else None)
+                    or (routes["data"].get("contact_url") if routes else None)
+                )
+            if (
+                isinstance(link, str)
+                and urlparse(link).scheme == "https"
+                and urlparse(link).hostname == "t.me"
+            ):
+                self.send(
+                    "Напишите специалисту в личные сообщения:",
+                    [("💬 Открыть диалог", "url", {"url": link})],
+                )
+            else:
+                self.send(
+                    "Контакт специалиста пока не опубликован.",
+                    [("В меню", "menu", {})],
+                )
+        elif action == "online_lesson":
+            if self.selected():
+                self.state_set(
+                    step="booking_topic", crm_review_id=None, booking_kind="online_lesson"
+                )
+                self.send(
+                    "Онлайн-занятие со специалистом. Опишите цель занятия и возрастную трудность. "
+                    "Специалист предложит время и отдельно согласует стоимость."
+                )
+        elif action == "wallet":
+            self.state_set(step=None)
+            self.send(
+                "Кошелёк пока не подключён: денежный баланс не ведётся, "
+                "пополнения и оплата из кошелька недоступны. "
+                "Историю существующих заказов можно посмотреть в разделе «Мои обращения».",
+                [("Мои обращения", "history", {}), ("В меню", "menu", {})],
+            )
         elif action == "profiles":
             if not self.privacy_gate():
                 return
@@ -1248,7 +1325,7 @@ class Bot:
             self.ask_attempt(d["id"])
         elif action == "booking":
             if self.selected():
-                self.state_set(step="booking_topic", crm_review_id=None)
+                self.state_set(step="booking_topic", crm_review_id=None, booking_kind=None)
                 self.send("Кратко опишите, что хотите обсудить на встрече.")
         elif action == "history":
             from .specialist_result_bot import RESULT_STATES
@@ -2466,6 +2543,10 @@ class Bot:
             )
         if text == "/menu":
             return self.action("menu", {})
+        if text == "/services":
+            return self.action("services", {})
+        if text == "/wallet":
+            return self.action("wallet", {})
         if text == "/id":
             return self.send("Ваш Telegram ID: " + str(self.user["id"]))
         if text == "/admin":
@@ -3038,7 +3119,12 @@ class Bot:
             else:
                 self.send("Профиль создан и выбран.", MENU)
         elif step == "booking_topic":
-            self.state_set(step="booking_preferences", topic=text)
+            topic = (
+                "Онлайн-занятие: " + text
+                if self.state["data"].get("booking_kind") == "online_lesson"
+                else text
+            )
+            self.state_set(step="booking_preferences", topic=topic)
             self.send("Какие дни и время вам удобны? Укажите часовой пояс.")
         elif step == "booking_preferences":
             if self.state["data"].get("crm_review_id"):
@@ -3063,7 +3149,7 @@ class Bot:
                         "key": "bot:" + self.update_id,
                     },
                 )
-                self.state_set(step=None)
+                self.state_set(step=None, booking_kind=None)
                 self.send("Заявка передана. Специалист предложит время.", MENU)
         elif step == "equipment":
             self.state_set(
