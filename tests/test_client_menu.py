@@ -1,8 +1,17 @@
 """Customer-facing Telegram service menu regression checks."""
 
-from marina.bot import Bot, MENU
+import json
+
+import pytest
+
+from marina.bot import MENU, Bot
 from marina.db import connect, insert, transaction
-from tests.test_identity import app, login
+from tests.test_identity import app as identity_app, login
+
+
+@pytest.fixture
+def app(tmp_path):
+    return identity_app.__wrapped__(tmp_path)
 
 
 def capture(app):
@@ -18,9 +27,7 @@ def capture(app):
 
 
 def buttons(message):
-    return [
-        button for row in message["reply_markup"]["inline_keyboard"] for button in row
-    ]
+    return [button for row in message["reply_markup"]["inline_keyboard"] for button in row]
 
 
 def test_menu_has_only_four_customer_actions(app):
@@ -53,13 +60,11 @@ def test_group_and_contact_links_come_from_published_settings(app):
     bot = Bot(app, {"id": 2}, 2, "configured-links")
     bot.action("join_group", {})
     assert any(
-        button.get("url") == "https://t.me/example_parent_group"
-        for button in buttons(messages[-1])
+        button.get("url") == "https://t.me/example_parent_group" for button in buttons(messages[-1])
     )
     bot.action("contact_specialist", {})
     assert any(
-        button.get("url") == "https://t.me/example_specialist"
-        for button in buttons(messages[-1])
+        button.get("url") == "https://t.me/example_specialist" for button in buttons(messages[-1])
     )
 
 
@@ -92,8 +97,6 @@ def test_online_lesson_uses_owned_profile_and_existing_booking(app):
             (bot.owner,),
         ).fetchone()
     assert item is not None
-    import json
-
     data = json.loads(item["data"])
     assert data["topic"] == "Онлайн-занятие: Развитие речи"
     assert data["preferences"] == "Пятница, 18:00 МСК"
