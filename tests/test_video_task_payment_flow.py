@@ -5,6 +5,8 @@ from marina.commerce import confirm
 from marina.db import connect, transaction
 from tests.test_consultation_commerce import app as consultation_app
 from tests.test_consultation_remainder import task_setup
+from tests.test_commerce import policy
+from tests.test_screening import publish
 
 app = consultation_app
 
@@ -27,6 +29,13 @@ def test_unpaid_video_task_cannot_be_assigned_or_uploaded(app):
 
 def test_dynamic_quote_uses_task_price_and_payment_unlocks_specialist(app):
     admin, owner, task = task_setup(app, paid=False)
+    commerce = policy(admin)
+    offer = admin.get("/api/admin/objects?kind=template").json["items"][-1]
+    publish(
+        admin,
+        "policy",
+        {**commerce["data"], "scope": "consultation", "offer_template_id": offer["id"]},
+    )
     app.config["LAVA_VIDEO_TASK_OFFER_ID"] = "video-task-dynamic-offer"
     quoted = owner.post("/api/video-tasks/" + task["id"] + "/quote", json={})
     assert quoted.status_code == 201, quoted.json
