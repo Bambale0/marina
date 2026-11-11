@@ -67,9 +67,7 @@ def test_bot_menu_and_old_action_obey_scope(app):
     ]
     # The existing service scope must still apply to the old sections.
     bot.send("Прежние разделы", LEGACY_MENU)
-    legacy_labels = [
-        b["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"] for b in row
-    ]
+    legacy_labels = [b["text"] for row in sent[-1]["reply_markup"]["inline_keyboard"] for b in row]
     assert "Занятия" not in legacy_labels
     assert "Консультация" in legacy_labels
     with pytest.raises(Problem):
