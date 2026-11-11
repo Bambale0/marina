@@ -180,7 +180,7 @@ def test_existing_legacy_video_task_can_be_replayed_without_fingerprint_conflict
         assert db.execute("SELECT COUNT(*) FROM objects WHERE kind='video_task'").fetchone()[0] == 1
         assert (
             db.execute(
-                "SELECT COUNT(*) FROM outbox WHERE object_id=? AND event='video_task.requested'",
+                "SELECT COUNT(*) FROM outbox WHERE object_id=? AND event='video_task.paid'",
                 (task["id"],),
             ).fetchone()[0]
             == 1

@@ -16,12 +16,17 @@ def show_task(bot, id):
         or d.get("assignment")
         or "Специалист подготовит задание. Оно придёт в этот чат. Не нужно заранее снимать случайные видео."
     )
+    paid = type(d.get("paid_at")) is int and d["paid_at"] > 0
     payment = d.get("manual_payment", {})
-    text += "\n\n" + (
-        "Оплата подтверждена специалистом"
-        if payment.get("status") == "confirmed"
-        else "Оплата не подтверждена"
-    )
+    if paid or payment.get("status") == "confirmed":
+        text += "\n\n✅ Оплата подтверждена"
+    else:
+        from .consultation_journey import display_price
+
+        price = display_price(d["amount_rub"] * 100)
+        text += "\n\nСначала оплатите видеоразбор. После подтверждения специалист получит заявку и подготовит задание."
+        if task["status"] == "awaiting_payment":
+            buttons.append(("💳 Оплатить видеоразбор за " + price, "video_task_pay", {"id": id}))
     if task["status"] == "closed":
         text += "\n\nВидеоразбор закрыт. Для продолжения свяжитесь со специалистом."
     if task["status"] == "awaiting_videos":
@@ -54,6 +59,25 @@ def show_task(bot, id):
 def handle_action(bot, action, d):
     if action == "video_task_open":
         show_task(bot, d["id"])
+    elif action == "video_task_pay":
+        task = bot.api("/video-tasks/" + d["id"])
+        if type(task["data"].get("paid_at")) is int and task["data"]["paid_at"] > 0:
+            show_task(bot, d["id"])
+            return True
+        quote = bot.api("/video-tasks/" + d["id"] + "/quote", "POST", {})
+        order = bot.api(
+            "/orders",
+            "POST",
+            {"quote_id": quote["id"], "key": "bot-video-task:" + quote["id"]},
+        )
+        if order["status"] == "paid":
+            show_task(bot, d["id"])
+            return True
+        bot.state_set(step="funnel_checkout_email", funnel_order_id=order["id"])
+        bot.send(
+            "Укажите email для электронного чека Lava.top. "
+            "Он используется только для оформления платежа."
+        )
     elif action == "video_task_upload":
         task = bot.api("/video-tasks/" + d["id"])
         require(

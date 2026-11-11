@@ -1034,17 +1034,19 @@ async function adminCard(id) {
       actions.append(button("Заявка на диагностику", () => adminCard(o.data.booking_id), true));
   }
   if(o.kind==="video_task") {
-    if (o.data.manual_payment?.status !== "confirmed") {
+    if (!o.data.paid_at && o.data.manual_payment?.status !== "confirmed") {
       const reference = field("Основание подтверждения оплаты", "text");
       actions.append(el("p", {}, "Оплата не подтверждена. Сумма заявки: " + o.data.amount_rub + " ₽."),
         reference.node,
         button("Подтвердить оплату", () => command("/admin/video-tasks/" + id + "/confirm-payment", {
           amount_rub: o.data.amount_rub, reference: reference.get(),
         }), true));
-    } else {
+    } else if (o.data.manual_payment?.status === "confirmed") {
       actions.append(el("p", {}, "Оплата подтверждена специалистом: " + o.data.manual_payment.amount_rub + " ₽"));
+    } else {
+      actions.append(el("p", {}, "Оплата подтверждена Lava.top: " + o.data.amount_rub + " ₽"));
     }
-    if(["requested","awaiting_videos","submitted"].includes(o.status))
+    if(["awaiting_payment","requested","awaiting_videos","submitted"].includes(o.status))
       actions.append(button("Закрыть видеоразбор",()=>command("/admin/video-tasks/"+id+"/close"),true));
     if(o.status==="requested") actions.append(button("Выдать задание родителю",()=>command("/admin/video-tasks/"+id+"/assignment")));
     if(o.status==="submitted") {

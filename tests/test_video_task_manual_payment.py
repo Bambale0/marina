@@ -61,7 +61,7 @@ def assert_one_confirmation(app, task):
 
 
 def test_unknown_manual_payment_is_explicit_in_client_views(app):
-    _, owner, task = task_setup(app)
+    _, owner, task = task_setup(app, paid=False)
     for item in client_task_views(owner, task):
         assert item["data"]["manual_payment"] == {
             "status": "unknown",
@@ -72,14 +72,15 @@ def test_unknown_manual_payment_is_explicit_in_client_views(app):
 
 
 def test_specialist_confirms_exact_snapshot_amount_without_provider_receipt(app):
-    admin, owner, task = task_setup(app)
+    admin, owner, task = task_setup(app, paid=False)
     actor = admin.get("/api/me").json["account"]["id"]
     app.config["HTTP_TRANSPORT"] = lambda *args: pytest.fail("Manual recording must not send HTTP")
     payload = confirmation(task, confirmed_by="client-spoof", confirmed_at=1, status="paid")
     response = confirm(admin, task, payload)
     assert response.status_code == 200, response.json
     saved = response.json
-    assert saved["status"] == task["status"] == "requested"
+    assert task["status"] == "awaiting_payment"
+    assert saved["status"] == "requested"
     assert saved["revision"] == task["revision"] + 1
     payment = saved["data"]["manual_payment"]
     assert payment == {
@@ -91,8 +92,8 @@ def test_specialist_confirms_exact_snapshot_amount_without_provider_receipt(app)
         "reason": payload["reason"],
         "request_revision": task["revision"],
     }
-    assert "paid_at" not in saved["data"]
-    assert "order_id" not in saved["data"]
+    assert saved["data"]["paid_at"] == app.clock[0]
+    assert saved["data"]["order_id"] is None
     for item in client_task_views(owner, task):
         assert item["data"]["manual_payment"] == {
             "status": "confirmed",
@@ -124,7 +125,7 @@ def test_specialist_confirms_exact_snapshot_amount_without_provider_receipt(app)
 
 
 def test_client_cannot_confirm_manual_payment(app):
-    _, owner, task = task_setup(app)
+    _, owner, task = task_setup(app, paid=False)
     assert confirm(owner, task).status_code == 403
     assert_no_provider_payment(app)
 
@@ -145,7 +146,7 @@ def test_client_cannot_confirm_manual_payment(app):
     ],
 )
 def test_invalid_manual_confirmation_does_not_change_task(app, changes):
-    admin, owner, task = task_setup(app)
+    admin, owner, task = task_setup(app, paid=False)
     rejected = confirm(admin, task, confirmation(task, **changes))
     assert rejected.status_code == 422, rejected.json
     current = owner.get("/api/video-tasks/" + task["id"]).json
@@ -155,27 +156,27 @@ def test_invalid_manual_confirmation_does_not_change_task(app, changes):
 
 
 def test_manual_confirmation_rejects_amount_different_from_task_snapshot(app):
-    admin, owner, task = task_setup(app)
+    admin, owner, task = task_setup(app, paid=False)
     response = confirm(admin, task, confirmation(task, amount_rub=task["data"]["amount_rub"] + 1))
     assert response.status_code == 422, response.json
     assert owner.get("/api/video-tasks/" + task["id"]).json["revision"] == task["revision"]
     assert_no_provider_payment(app)
 
 
-def test_manual_confirmation_rejects_stale_revision(app):
-    admin, owner, task = task_setup(app)
+def test_assignment_requires_payment_and_confirmation_rejects_stale_revision(app):
+    admin, owner, task = task_setup(app, paid=False)
     assigned = admin.post(
         "/api/admin/video-tasks/" + task["id"] + "/assignment",
         json={"revision": task["revision"], "reason": "Назначение", "text": "Задание"},
     )
-    assert assigned.status_code == 200, assigned.json
-    rejected = confirm(admin, task)
+    assert assigned.status_code == 409, assigned.json
+    rejected = confirm(admin, task, confirmation(task, revision=task["revision"] - 1))
     assert rejected.status_code == 409, rejected.json
-    assert owner.get("/api/video-tasks/" + task["id"]).json["revision"] == assigned.json["revision"]
+    assert owner.get("/api/video-tasks/" + task["id"]).json["revision"] == task["revision"]
 
 
 def test_identical_manual_confirmation_retries_preserve_history_and_later_task_work(app):
-    admin, owner, task = task_setup(app)
+    admin, owner, task = task_setup(app, paid=False)
     payload = confirmation(task)
     first = confirm(admin, task, payload)
     assert first.status_code == 200, first.json
@@ -202,7 +203,7 @@ def test_identical_manual_confirmation_retries_preserve_history_and_later_task_w
 
 @pytest.mark.parametrize("changed", ["reference", "reason", "amount_rub", "actor"])
 def test_manual_confirmation_cannot_be_overwritten(app, changed):
-    admin, _, task = task_setup(app)
+    admin, _, task = task_setup(app, paid=False)
     first = confirm(admin, task)
     assert first.status_code == 200, first.json
     payload = confirmation(task, revision=first.json["revision"])
@@ -222,7 +223,7 @@ def test_manual_confirmation_cannot_be_overwritten(app, changed):
 
 @pytest.mark.parametrize("same_reference", [True, False], ids=["duplicate", "conflict"])
 def test_concurrent_manual_confirmations_record_once(app, same_reference):
-    admin, _, task = task_setup(app)
+    admin, _, task = task_setup(app, paid=False)
     token = admin.environ_base["HTTP_AUTHORIZATION"]
     barrier = Barrier(2)
 
@@ -241,12 +242,12 @@ def test_concurrent_manual_confirmations_record_once(app, same_reference):
     assert_one_confirmation(app, task)
 
 
-def test_unknown_manual_payment_does_not_block_task_execution(app, tmp_path):
+def test_manual_confirmation_allows_task_execution_without_provider_receipt(app, tmp_path):
     admin, owner, task, _ = submitted_task(app, tmp_path)
     audio = upload_task_response_audio(admin, task, tmp_path)
     completed = publish_answer(admin, task, [audio["id"]])
     assert completed.status_code == 200, completed.json
     assert completed.json["status"] == "completed"
     client = owner.get("/api/video-tasks/" + task["id"]).json
-    assert client["data"]["manual_payment"]["status"] == "unknown"
+    assert client["data"]["manual_payment"]["status"] == "confirmed"
     assert_no_provider_payment(app)

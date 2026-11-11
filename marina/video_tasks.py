@@ -1,8 +1,10 @@
 """Human-assigned private video tasks; financial receipts are never invented."""
 
+import copy
 import hashlib
 import json
 import math
+import os
 import subprocess
 import tempfile
 from flask import g, request, Response
@@ -12,6 +14,14 @@ from .db import audit, emit, insert, uid, update
 from .media import verify_video
 from .privacy import consent_required
 from .screening import idempotent
+
+
+def payment_confirmed(task):
+    """A video assignment is available only after durable payment evidence."""
+    return bool(
+        (type(task["data"].get("paid_at")) is int and task["data"]["paid_at"] > 0)
+        or task["data"].get("manual_payment", {}).get("status") == "confirmed"
+    )
 
 
 def require_response_audio(db, task, attachments):
@@ -69,6 +79,10 @@ def require_response_audio(db, task, attachments):
 
 
 def register_video_tasks(app):
+    app.config.setdefault(
+        "LAVA_VIDEO_TASK_OFFER_ID", os.getenv("LAVA_VIDEO_TASK_OFFER_ID", "")
+    )
+
     @app.post("/api/video-tasks")
     @protected()
     def create_task():
@@ -102,11 +116,14 @@ def register_video_tasks(app):
             "videos": [],
             "recommendations": None,
             "due_at": None,
+            "order_id": None,
+            "paid_at": None,
         }
 
         def create():
-            task = insert(g.db, "video_task", payload, g.now, g.actor["id"], status="requested")
-            emit(g.db, task["owner"], task["id"], "video_task.requested", g.now)
+            task = insert(
+                g.db, "video_task", payload, g.now, g.actor["id"], status="awaiting_payment"
+            )
             audit(
                 g.db,
                 g.actor["id"],
@@ -119,6 +136,93 @@ def register_video_tasks(app):
             return task
 
         return idempotent(g.db, "video-task:" + g.actor["id"], lead["id"], payload, create), 201
+
+    @app.post("/api/video-tasks/<id>/quote")
+    @protected()
+    def quote(id):
+        body()  # The client cannot provide a price or an external offer identifier.
+        task = object_get(g.db, id, "video_task", g.actor["id"])
+        require(not payment_confirmed(task), "Видеоразбор уже оплачен", 409)
+        require(task["status"] == "awaiting_payment", "Оплата для задания уже закрыта", 409)
+        offer_id = app.config.get("LAVA_VIDEO_TASK_OFFER_ID", "").strip()
+        require(offer_id, "Оплата видеоразбора пока не настроена", 503)
+        from .commerce import provider_enabled
+        from .scope import require_service
+
+        require_service(g.db, "video_task")
+        require(provider_enabled(app, "lava"), "Этот способ оплаты отключён")
+        operations = policies(g.db, "operations")
+        require(
+            not operations or not operations["data"].get("pause_sales"),
+            "Приём новых заказов приостановлен",
+        )
+        intent = idempotent(
+            g.db,
+            "video-task-intent:" + g.actor["id"],
+            task["id"],
+            {},
+            lambda: insert(
+                g.db,
+                "purchase_intent",
+                {"service": "video_task", "subject_ids": [task["id"]], "reference": task["id"]},
+                g.now,
+                g.actor["id"],
+                status="open",
+            ),
+        )
+        for row in g.db.execute(
+            "SELECT * FROM objects WHERE kind='quote' AND owner=? "
+            "AND json_extract(data,'$.intent_id')=? ORDER BY created DESC,rowid DESC",
+            (g.actor["id"], intent["id"]),
+        ):
+            from .db import unpack
+
+            existing = unpack(row)
+            if existing["status"] == "valid" and existing["data"]["expires"] > g.now:
+                return existing
+        policy = policies(g.db, "commerce", "consultation")
+        require(policy, "Опубликуйте правила покупки видеоразбора")
+        ttl = policy["data"].get("quote_ttl_seconds")
+        require(type(ttl) is int and ttl > 0, "Проверьте срок действия расчёта")
+        lead = object_get(g.db, task["data"]["lead_id"], "consultation_lead", g.actor["id"])
+        route = lead["data"]["route_snapshot"]
+        amount = task["data"]["amount_rub"] * 100
+        product = {
+            "service": "video_task",
+            "title": "Видеоразбор малыша до 3 лет",
+            "terms": route["text"],
+            "amount": amount,
+            "currency": "RUB",
+            "lava_offer_id": offer_id,
+            "launch_approved": True,
+            "web_sales_approved": True,
+        }
+        data = {
+            "intent_id": intent["id"],
+            "product_id": "video-task-dynamic",
+            "product_snapshot": product,
+            "policy_id": policy["id"],
+            "policy_snapshot": copy.deepcopy(policy["data"]),
+            "video_task_id": task["id"],
+            "family": [],
+            "lines": [
+                {
+                    "id": uid(),
+                    "subject_id": task["id"],
+                    "base": amount,
+                    "discount": 0,
+                    "amount": amount,
+                }
+            ],
+            "total": amount,
+            "currency": "RUB",
+            "provider": "lava",
+            "surface": "telegram",
+            "expires": g.now + ttl,
+        }
+        result = insert(g.db, "quote", data, g.now, g.actor["id"], status="valid")
+        audit(g.db, g.actor["id"], "quote.create", result, g.now, "Цена видеоразбора из заявки")
+        return result, 201
 
     @app.get("/api/video-tasks/<id>")
     @protected()
@@ -157,6 +261,11 @@ def register_video_tasks(app):
                 409,
             )
             return task
+        require(
+            task["status"] in ("awaiting_payment", "requested"),
+            "Оплату нельзя подтвердить для закрытого или уже выполняемого разбора",
+            409,
+        )
         require(task["revision"] == revision, "Задание изменено, обновите карточку", 409)
         require(
             type(task["data"].get("amount_rub")) is int and amount == task["data"]["amount_rub"],
@@ -171,7 +280,13 @@ def register_video_tasks(app):
             "reason": why,
             "request_revision": revision,
         }
-        result = update(g.db, task, g.now, {**task["data"], "manual_payment": payment})
+        result = update(
+            g.db,
+            task,
+            g.now,
+            {**task["data"], "manual_payment": payment, "paid_at": g.now},
+            "requested",
+        )
         audit(
             g.db,
             g.actor["id"],
@@ -181,6 +296,7 @@ def register_video_tasks(app):
             why,
             task["revision"],
         )
+        emit(g.db, result["owner"], id, "video_task.paid", g.now)
         return result
 
     @app.post("/api/admin/video-tasks/<id>/<action>")
@@ -198,7 +314,7 @@ def register_video_tasks(app):
             )
         if action == "close":
             require(
-                task["status"] in ("requested", "awaiting_videos", "submitted"),
+                task["status"] in ("awaiting_payment", "requested", "awaiting_videos", "submitted"),
                 "Разбор уже завершён",
                 409,
             )
@@ -210,6 +326,7 @@ def register_video_tasks(app):
             }
             state = "closed"
         elif action == "assignment":
+            require(payment_confirmed(task), "Сначала подтвердите оплату видеоразбора", 409)
             require(task["status"] == "requested", "Задание уже выдано", 409)
             payload = {
                 **task["data"],
@@ -244,6 +361,7 @@ def register_video_tasks(app):
     def upload(id):
         consent_required(g.db, g.actor["id"])
         task = object_get(g.db, id, "video_task", g.actor["id"])
+        require(payment_confirmed(task), "Сначала оплатите видеоразбор", 409)
         require(
             task["status"] == "awaiting_videos" and task["data"].get("assignment"),
             "Дождитесь задания специалиста",
@@ -334,6 +452,8 @@ def register_video_tasks(app):
         if task["status"] in ("submitted", "completed"):
             return task
         require(
+            payment_confirmed(task)
+            and
             task["status"] == "awaiting_videos"
             and len(task["data"]["videos"]) == task["data"]["rules"]["required_videos"],
             "Выполните задание и загрузите видео по всем пунктам",

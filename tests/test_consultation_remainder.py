@@ -235,7 +235,7 @@ def test_no_nonexistent_free_file_is_claimed_or_delivered(app):
     assert r.status_code == 404
 
 
-def task_setup(app):
+def task_setup(app, paid=True):
     admin, owner, _ = route_setup(app)
     lead = owner.post(
         "/api/consultation-leads", json={"route": "baby_0_2", "action": "booking", "key": "task"}
@@ -243,7 +243,20 @@ def task_setup(app):
     r = owner.post("/api/video-tasks", json={"lead_id": lead["id"]})
     assert r.status_code == 201, r.json
     assert owner.post("/api/video-tasks", json={"lead_id": lead["id"]}).json["id"] == r.json["id"]
-    return admin, owner, r.json
+    task = r.json
+    if paid:
+        confirmed = admin.post(
+            "/api/admin/video-tasks/" + task["id"] + "/confirm-payment",
+            json={
+                "revision": task["revision"],
+                "amount_rub": task["data"]["amount_rub"],
+                "reference": "Synthetic paid task setup",
+                "reason": "Synthetic payment prerequisite",
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.json
+        task = confirmed.json
+    return admin, owner, task
 
 
 def make_response_audio(tmp_path, extension="ogg"):

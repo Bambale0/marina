@@ -153,7 +153,10 @@ def register_providers(app):
     @protected()
     def checkout(id):
         o = object_get(g.db, id, "order", g.actor["id"])
-        if g.actor["role"] == "admin":
+        if (
+            g.actor["role"] == "admin"
+            and o["data"].get("product_snapshot", {}).get("service") != "video_task"
+        ):
             from .commerce import admin_fulfill
 
             return admin_fulfill(g.db, o, g.actor["id"], g.now)

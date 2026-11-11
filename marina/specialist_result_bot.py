@@ -122,7 +122,8 @@ def handle_action(bot, action, data):
         task = bot.api("/admin/objects/" + data["id"])["object"]
         require(task["kind"] == "video_task", "Выберите видеоразбор")
         require(
-            task["data"].get("manual_payment", {}).get("status") != "confirmed",
+            not task["data"].get("paid_at")
+            and task["data"].get("manual_payment", {}).get("status") != "confirmed",
             "Оплата уже подтверждена специалистом",
         )
         pending = {

@@ -217,10 +217,9 @@ def handle_action(bot, action, d):
         )
         if d["route"] == "baby_0_2" and interest == "booking":
             task = bot.api("/video-tasks", "POST", {"lead_id": lead["id"]})
-            bot.send(
-                "Заявка на видеоразбор передана специалисту. Специалист даст задание; снимите его выполнение ребёнком. После просмотра вы получите коррекцию выполнения и рекомендации.",
-                [("Открыть видеоразбор", "video_task_open", {"id": task["id"]})],
-            )
+            from .video_task_bot import show_task
+
+            show_task(bot, task["id"])
         else:
             bot.send(
                 "Запрос передан специалисту. Откройте личный диалог.",
