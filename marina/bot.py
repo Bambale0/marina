@@ -1148,11 +1148,14 @@ class Bot:
             with connect(self.app.config["DATABASE"]) as db:
                 operations = policies(db, "operations")
                 funnel = published(db)
-                link = (
-                    (operations["data"].get("group_url") if operations else None)
-                    or (funnel["data"].get("channel_url") if funnel else None)
+                link = (operations["data"].get("group_url") if operations else None) or (
+                    funnel["data"].get("channel_url") if funnel else None
                 )
-            if isinstance(link, str) and urlparse(link).scheme == "https" and urlparse(link).hostname == "t.me":
+            if (
+                isinstance(link, str)
+                and urlparse(link).scheme == "https"
+                and urlparse(link).hostname == "t.me"
+            ):
                 self.send(
                     "Откройте наше сообщество в Telegram:",
                     [("👥 Перейти в группу или канал", "url", {"url": link})],
@@ -1175,7 +1178,11 @@ class Bot:
                     or (funnel["data"].get("contact_url") if funnel else None)
                     or (routes["data"].get("contact_url") if routes else None)
                 )
-            if isinstance(link, str) and urlparse(link).scheme == "https" and urlparse(link).hostname == "t.me":
+            if (
+                isinstance(link, str)
+                and urlparse(link).scheme == "https"
+                and urlparse(link).hostname == "t.me"
+            ):
                 self.send(
                     "Напишите специалисту в личные сообщения:",
                     [("💬 Открыть диалог", "url", {"url": link})],
