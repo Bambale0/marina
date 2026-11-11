@@ -79,7 +79,7 @@ def test_online_lesson_uses_owned_profile_and_existing_booking(app):
         "/api/subjects",
         json={"kind": "child", "name": "Test child", "birth_date": "2020-01-01"},
     )
-    assert profile.status_code == 200, profile.json
+    assert profile.status_code == 201, profile.json
     bot = Bot(app, {"id": 2}, 2, "online-booking")
     bot.state_set(subject_id=profile.json["id"])
     bot.action("online_lesson", {})
