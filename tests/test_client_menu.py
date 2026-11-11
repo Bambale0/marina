@@ -6,7 +6,8 @@ import pytest
 
 from marina.bot import MENU, Bot
 from marina.db import connect, insert, transaction
-from tests.test_identity import app as identity_app, login
+from tests.test_identity import app as identity_app
+from tests.test_identity import login
 
 
 @pytest.fixture
