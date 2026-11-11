@@ -30,9 +30,7 @@ def test_unpaid_video_task_cannot_be_assigned_or_uploaded(app):
 def test_dynamic_quote_uses_task_price_and_payment_unlocks_specialist(app):
     admin, owner, task = task_setup(app, paid=False)
     commerce = policy(admin)
-    offer = publish(
-        admin, "template", {"type": "offer", "text": "Synthetic video task offer"}
-    )
+    offer = publish(admin, "template", {"type": "offer", "text": "Synthetic video task offer"})
     publish(
         admin,
         "policy",

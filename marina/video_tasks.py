@@ -79,9 +79,7 @@ def require_response_audio(db, task, attachments):
 
 
 def register_video_tasks(app):
-    app.config.setdefault(
-        "LAVA_VIDEO_TASK_OFFER_ID", os.getenv("LAVA_VIDEO_TASK_OFFER_ID", "")
-    )
+    app.config.setdefault("LAVA_VIDEO_TASK_OFFER_ID", os.getenv("LAVA_VIDEO_TASK_OFFER_ID", ""))
 
     @app.post("/api/video-tasks")
     @protected()
@@ -453,8 +451,7 @@ def register_video_tasks(app):
             return task
         require(
             payment_confirmed(task)
-            and
-            task["status"] == "awaiting_videos"
+            and task["status"] == "awaiting_videos"
             and len(task["data"]["videos"]) == task["data"]["rules"]["required_videos"],
             "Выполните задание и загрузите видео по всем пунктам",
         )

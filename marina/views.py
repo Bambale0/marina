@@ -57,7 +57,9 @@ def client_view(obj):
             "confirmed_at": payment.get("confirmed_at") if confirmed else None,
         }
         obj["data"]["payment_status"] = (
-            "confirmed" if confirmed or (type(d.get("paid_at")) is int and d["paid_at"] > 0) else "pending"
+            "confirmed"
+            if confirmed or (type(d.get("paid_at")) is int and d["paid_at"] > 0)
+            else "pending"
         )
         return obj
     if kind == "video_review":
