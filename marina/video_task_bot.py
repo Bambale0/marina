@@ -16,7 +16,7 @@ def show_task(bot, id):
         or d.get("assignment")
         or "Специалист подготовит задание. Оно придёт в этот чат. Не нужно заранее снимать случайные видео."
     )
-    paid = type(d.get("paid_at")) is int and d["paid_at"] > 0
+    paid = d.get("payment_status") == "confirmed"
     payment = d.get("manual_payment", {})
     if paid or payment.get("status") == "confirmed":
         text += "\n\n✅ Оплата подтверждена"
@@ -61,7 +61,7 @@ def handle_action(bot, action, d):
         show_task(bot, d["id"])
     elif action == "video_task_pay":
         task = bot.api("/video-tasks/" + d["id"])
-        if type(task["data"].get("paid_at")) is int and task["data"]["paid_at"] > 0:
+        if task["data"].get("payment_status") == "confirmed":
             show_task(bot, d["id"])
             return True
         quote = bot.api("/video-tasks/" + d["id"] + "/quote", "POST", {})

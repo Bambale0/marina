@@ -64,8 +64,10 @@ def test_dynamic_quote_uses_task_price_and_payment_unlocks_specialist(app):
         assert paid["status"] == "paid"
     current = owner.get("/api/video-tasks/" + task["id"]).json
     assert current["status"] == "requested"
-    assert current["data"]["paid_at"] == app.clock[0]
-    assert current["data"]["order_id"] == order["id"]
+    assert current["data"]["payment_status"] == "confirmed"
+    private = admin.get("/api/admin/objects/" + task["id"]).json["object"]
+    assert private["data"]["paid_at"] == app.clock[0]
+    assert private["data"]["order_id"] == order["id"]
     assigned = admin.post(
         "/api/admin/video-tasks/" + task["id"] + "/assignment",
         json={
