@@ -672,6 +672,19 @@ def validate(obj):
         )
 
     if obj["kind"] == "policy" and d["type"] == "operations":
+        if "followup_interval_overrides" in d:
+            overrides = d["followup_interval_overrides"]
+            require(isinstance(overrides, dict), "Интервалы касаний задаются по аккаунтам")
+            for account_id, seconds in overrides.items():
+                require(
+                    isinstance(account_id, str)
+                    and g.db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone(),
+                    "Выберите существующий аккаунт для интервала касаний",
+                )
+                require(
+                    type(seconds) is int and 60 <= seconds <= 86400,
+                    "Интервал касаний — целое число секунд от 60 до 86400",
+                )
         if "enabled_services" in d:
             from .scope import SERVICES
 
