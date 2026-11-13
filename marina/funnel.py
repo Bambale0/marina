@@ -1454,10 +1454,18 @@ def apply_profile_job(app, owner, id):
 
 
 def followup_times(app, account, snapshot, delivered_at):
-    """Admin previews use 15-minute steps; client snapshot hours stay unchanged."""
-    admin = account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"]
+    """Resolve optional account timing without granting administrative privileges."""
+    from .commerce import policies
+
+    with connect(app.config["DATABASE"]) as db:
+        operations = policies(db, "operations")
+    overrides = operations["data"].get("followup_interval_overrides", {}) if operations else {}
+    interval = overrides.get(account["id"])
+    if interval is None and account["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"]:
+        interval = 900
     return {
-        str(f["hours"]): delivered_at + (index * 900 if admin else f["hours"] * 3600)
+        str(f["hours"]): delivered_at
+        + (index * interval if interval is not None else f["hours"] * 3600)
         for index, f in enumerate(snapshot["followups"], 1)
     }
 
