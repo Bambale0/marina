@@ -7,8 +7,14 @@ import pytest
 from marina import Problem
 from marina.commerce import confirm
 from marina.db import connect, insert, transaction, unpack
-from marina.neurocoins import balance, entry, validate_policy
-from tests.test_identity import app, login
+from marina.neurocoins import entry, validate_policy
+from tests.test_identity import app as identity_app
+from tests.test_identity import login
+
+
+@pytest.fixture
+def app(tmp_path):
+    return identity_app.__wrapped__(tmp_path)
 
 
 @pytest.fixture
