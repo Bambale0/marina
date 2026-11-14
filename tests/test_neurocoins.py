@@ -31,18 +31,17 @@ def client_and_admin(app):
         PUBLIC_URL="https://fixture.example",
         ENABLED_PAYMENT_PROVIDERS=["lava"],
     )
-    clients = (login(app, 2), login(app, 1))
-    for client in clients:
-        client.environ_base.update(
-            {
-                "wsgi.url_scheme": "https",
-                "HTTP_HOST": "wallet.example.test",
-                "HTTP_ORIGIN": "https://wallet.example.test",
-                "HTTP_SEC_FETCH_SITE": "same-origin",
-                "HTTP_SEC_FETCH_MODE": "cors",
-            }
-        )
-    return clients
+    return login(app, 2), login(app, 1)
+
+
+WEB_REQUEST = {
+    "base_url": "https://wallet.example.test",
+    "headers": {
+        "Origin": "https://wallet.example.test",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+    },
+}
 
 
 def publish_policy(app, *, enabled=True, coins=150, price=120):
@@ -113,6 +112,7 @@ def topup(client, *, booking_id=None, key="fixture-topup", surface="external_web
             "policy_id": wallet(client)["policy_id"],
             "terms_accepted": True,
         },
+        **WEB_REQUEST,
     )
 
 
@@ -150,25 +150,31 @@ def test_external_wallet_page_is_visible_but_checkout_disabled_by_default(app):
 def test_external_topup_cannot_be_activated_by_client_surface_alone(app, client_and_admin):
     owner, admin = client_and_admin
     publish_policy(app)
-    original = dict(owner.environ_base)
-    try:
-        owner.environ_base["wsgi.url_scheme"] = "http"
-        assert topup(owner).status_code == 403
-        owner.environ_base["wsgi.url_scheme"] = "https"
-        owner.environ_base["HTTP_HOST"] = "other.example.test"
-        assert topup(owner).status_code == 403
-        owner.environ_base["HTTP_HOST"] = "wallet.example.test"
-        owner.environ_base.pop("HTTP_ORIGIN")
-        assert topup(owner).status_code == 403
-        owner.environ_base["HTTP_ORIGIN"] = "https://wallet.example.test"
-        owner.environ_base["HTTP_SEC_FETCH_SITE"] = "cross-site"
-        assert topup(owner).status_code == 403
-        owner.environ_base["HTTP_SEC_FETCH_SITE"] = "same-origin"
-        owner.environ_base["HTTP_SEC_FETCH_MODE"] = "navigate"
-        assert topup(owner).status_code == 403
-    finally:
-        owner.environ_base.clear()
-        owner.environ_base.update(original)
+    original = WEB_REQUEST
+    payload = {
+        "package_id": "p150",
+        "key": "origin-attack",
+        "surface": "external_web",
+        "policy_id": wallet(owner)["policy_id"],
+        "terms_accepted": True,
+    }
+    denied = [
+        {"base_url": "http://wallet.example.test", "headers": original["headers"]},
+        {"base_url": "https://other.example.test", "headers": original["headers"]},
+        {"base_url": original["base_url"], "headers": {}},
+        {"base_url": original["base_url"], "headers": {
+            **original["headers"], "Origin": "https://evil.example.test",
+        }},
+        {"base_url": original["base_url"], "headers": {
+            **original["headers"], "Sec-Fetch-Site": "cross-site",
+        }},
+        {"base_url": original["base_url"], "headers": {
+            **original["headers"], "Sec-Fetch-Mode": "navigate",
+        }},
+    ]
+    for arguments in denied:
+        result = owner.post("/api/wallet/topups", json=payload, **arguments)
+        assert result.status_code == 403, result.json
     assert wallet(owner)["balance"] == 0
     with connect(app.config["DATABASE"]) as db:
         assert db.execute("SELECT count(*) FROM objects WHERE kind='order'").fetchone()[0] == 0
@@ -180,6 +186,7 @@ def test_external_topup_requires_published_terms_snapshot(app, client_and_admin)
     missing = owner.post(
         "/api/wallet/topups",
         json={"package_id": "p150", "key": "missing-terms", "surface": "external_web"},
+        **WEB_REQUEST,
     )
     assert missing.status_code == 422, missing.json
     wrong = owner.post(
@@ -191,6 +198,7 @@ def test_external_topup_requires_published_terms_snapshot(app, client_and_admin)
             "policy_id": "wrong-policy",
             "terms_accepted": True,
         },
+        **WEB_REQUEST,
     )
     assert wrong.status_code == 422, wrong.json
     approved = topup(owner)
