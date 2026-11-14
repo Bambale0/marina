@@ -1213,7 +1213,8 @@ class Bot:
                 services = {x["id"]: x for x in data["services"]}
                 if "online_lesson" in services:
                     bookings = [
-                        x for x in self.api("/history")["items"]
+                        x
+                        for x in self.api("/history")["items"]
                         if x["kind"] == "booking"
                         and x["status"] == "confirmed"
                         and x["data"].get("booking_kind") == "online_lesson"
@@ -1221,8 +1222,11 @@ class Bot:
                     ]
                     for b in bookings[:5]:
                         buttons.append(
-                            ("📅 Занятие · " + str(services["online_lesson"]["coins"]) + " НК",
-                             "wallet_pay_booking", {"id": b["id"]})
+                            (
+                                "📅 Занятие · " + str(services["online_lesson"]["coins"]) + " НК",
+                                "wallet_pay_booking",
+                                {"id": b["id"]},
+                            )
                         )
                 text += (
                     "\n\nПополнение через Lava.top готовится для отдельного "
@@ -1232,22 +1236,21 @@ class Bot:
                 text += "\n\nНовые пополнения и оплаты пока не опубликованы."
             if data["history"]:
                 text += "\n\nПоследние операции:\n" + "\n".join(
-                    ("+" if x["delta"] > 0 else "")
-                    + str(x["delta"]) + " НК · " + x["source"]
+                    ("+" if x["delta"] > 0 else "") + str(x["delta"]) + " НК · " + x["source"]
                     for x in data["history"][:5]
                 )
             self.send(text, buttons + [("Мои обращения", "history", {}), ("В меню", "menu", {})])
         elif action == "wallet_pay_booking":
             wallet = self.api("/wallet")
-            tariff = next(
-                (x for x in wallet["services"] if x["id"] == "online_lesson"), None
-            )
+            tariff = next((x for x in wallet["services"] if x["id"] == "online_lesson"), None)
             booking = self.api("/bookings/" + d["id"])
             require(
-                tariff and booking["status"] == "confirmed"
+                tariff
+                and booking["status"] == "confirmed"
                 and booking["data"].get("booking_kind") == "online_lesson"
                 and booking["data"].get("paid_at") is None,
-                "Запись недоступна для оплаты Нейро-коинами", 409,
+                "Запись недоступна для оплаты Нейро-коинами",
+                409,
             )
             missing = max(0, tariff["coins"] - wallet["balance"])
             if missing:
@@ -1259,9 +1262,11 @@ class Bot:
                     [("Мой кошелёк", "wallet", {})],
                 )
             self.send(
-                "Подтвердить списание " + str(tariff["coins"])
+                "Подтвердить списание "
+                + str(tariff["coins"])
                 + " НК за онлайн-занятие? Остаток: "
-                + str(wallet["balance"]) + " НК.",
+                + str(wallet["balance"])
+                + " НК.",
                 [
                     ("✅ Оплатить Нейро-коинами", "wallet_pay_confirm", {"id": d["id"]}),
                     ("Вернуться", "wallet", {}),
@@ -1270,7 +1275,8 @@ class Bot:
         elif action == "wallet_pay_confirm":
             result = self.api(
                 "/wallet/bookings/" + d["id"] + "/pay",
-                "POST", {"key": "bot:" + self.update_id},
+                "POST",
+                {"key": "bot:" + self.update_id},
             )
             self.send(
                 "Занятие оплачено. Остаток: " + str(result["balance"]) + " НК.",
@@ -3216,7 +3222,11 @@ class Bot:
                         "subject_id": s["id"],
                         "topic": self.state["data"]["topic"],
                         "preferences": text,
-                        **({"booking_kind": "online_lesson"} if self.state["data"].get("booking_kind") == "online_lesson" else {}),
+                        **(
+                            {"booking_kind": "online_lesson"}
+                            if self.state["data"].get("booking_kind") == "online_lesson"
+                            else {}
+                        ),
                         "key": "bot:" + self.update_id,
                     },
                 )
