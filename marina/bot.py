@@ -1211,7 +1211,7 @@ class Bot:
             buttons = []
             if data["enabled"]:
                 services = {x["id"]: x for x in data["services"]}
-                if "online_lesson" in services:
+                if data["spend_enabled"] and "online_lesson" in services:
                     bookings = [
                         x
                         for x in self.api("/history")["items"]
