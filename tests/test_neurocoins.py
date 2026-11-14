@@ -161,9 +161,7 @@ def test_policy_rejects_stars_and_invalid_amounts(app):
         )
 
 
-def test_admin_publishes_pack_and_tariff_through_existing_workflow(
-    app, client_and_admin
-):
+def test_admin_publishes_pack_and_tariff_through_existing_workflow(app, client_and_admin):
     client, admin = client_and_admin
     data = {
         "type": "neurocoins",
@@ -172,17 +170,18 @@ def test_admin_publishes_pack_and_tariff_through_existing_workflow(
         "terms": "Утвержденные условия",
         "quote_ttl_seconds": 3600,
         "packages": [
-            {"id": "p150", "title": "150 НК", "coins": 150,
-             "lava_offer_id": "fixture-offer"}
+            {"id": "p150", "title": "150 НК", "coins": 150, "lava_offer_id": "fixture-offer"}
         ],
-        "services": [
-            {"id": "online_lesson", "title": "Занятие", "coins": 120}
-        ],
+        "services": [{"id": "online_lesson", "title": "Занятие", "coins": 120}],
     }
     created = admin.post(
         "/api/admin/content",
-        json={"kind": "policy", "title": "Нейро-коины", "data": data,
-              "reason": "Тест создания тарифов"},
+        json={
+            "kind": "policy",
+            "title": "Нейро-коины",
+            "data": data,
+            "reason": "Тест создания тарифов",
+        },
     )
     assert created.status_code == 201, created.json
     approved = admin.post(
@@ -482,9 +481,7 @@ def test_verified_lava_receipt_auto_purchases_only_once(app, client_and_admin):
     ]
 
 
-def test_cancelled_topup_cannot_auto_purchase_even_if_provider_paid(
-    app, client_and_admin
-):
+def test_cancelled_topup_cannot_auto_purchase_even_if_provider_paid(app, client_and_admin):
     client, admin = client_and_admin
     publish_policy(app)
     booking = booking_confirmed(app, client, admin)
