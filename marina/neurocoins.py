@@ -311,6 +311,41 @@ def register_neurocoins(app):
             "history": [dict(x) for x in history],
         }
 
+    @app.get("/api/wallet/topups/<id>")
+    @protected()
+    def topup_status(id):
+        """Private status polling for the independently hosted checkout page."""
+        order = object_get(g.db, id, "order", g.actor["id"])
+        require(
+            order["data"].get("product_snapshot", {}).get("service") == "neurocoins",
+            "Пополнение не найдено", 404,
+        )
+        row = g.db.execute(
+            "SELECT * FROM objects WHERE kind='payment_attempt' AND owner=? "
+            "AND json_extract(data,'$.order_id')=? ORDER BY created DESC LIMIT 1",
+            (g.actor["id"], id),
+        ).fetchone()
+        from .db import unpack
+
+        attempt = unpack(row)
+        from .commerce import checkout_open
+
+        link = (
+            attempt["data"].get("url")
+            if attempt
+            and attempt["status"] == "ready"
+            and checkout_open(g.db, order, g.now)
+            else None
+        )
+        return {
+            "order_id": id,
+            "status": order["status"],
+            "attempt_status": attempt["status"] if attempt else None,
+            "payment_url": link if isinstance(link, str) and link.startswith("https://") else None,
+            "balance": balance(g.db, g.actor["id"]),
+            "auto_booking_id": order["data"].get("auto_booking_id"),
+        }
+
     @app.post("/api/wallet/topups")
     @protected()
     def topup():
