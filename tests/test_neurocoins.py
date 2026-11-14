@@ -8,6 +8,8 @@ from marina import Problem
 from marina.commerce import confirm
 from marina.db import connect, insert, transaction, unpack
 from marina.neurocoins import entry, validate_policy
+from marina.operations import work_once
+from marina.providers import check_lava
 from tests.test_identity import app as identity_app
 from tests.test_identity import login
 
@@ -301,6 +303,104 @@ def test_existing_balance_combines_with_topup_and_auto_purchase(app, client_and_
     assert wallet(client)["balance"] == 40
     booked = client.get("/api/bookings/" + booking["id"]).json
     assert booked["data"]["neurocoins_paid"] == 210
+
+
+def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(
+    app, client_and_admin
+):
+    client, admin = client_and_admin
+    publish_policy(app)
+    order = topup(client)
+    assert order.status_code == 201, order.json
+    order_id = order.json["id"]
+    other = login(app, 3)
+    assert other.get("/api/wallet/topups/" + order_id).status_code == 404
+    assert client.get("/api/wallet/topups/" + order_id).json["payment_url"] is None
+
+    attempt = client.post(
+        "/api/orders/" + order_id + "/checkout",
+        json={"email": "buyer@example.test"},
+    )
+    assert attempt.status_code == 202, attempt.json
+    requests = []
+
+    def fake_provider(method, url, data, headers):
+        requests.append((method, url, data))
+        if url.endswith("/api/v3/invoice"):
+            assert data["currency"] == "RUB"
+            assert data["amount"] == 150
+            assert data["offerId"] == "offer-fixture"
+            return {"id": "lava-sandbox", "paymentUrl": "https://checkout.example.test/pay"}
+        return {"ok": True, "result": {"message_id": len(requests)}}
+
+    app.config["HTTP_TRANSPORT"] = fake_provider
+    for _ in range(30):
+        with connect(app.config["DATABASE"]) as db:
+            attempt_status = db.execute(
+                "SELECT status FROM objects WHERE id=?", (attempt.json["id"],)
+            ).fetchone()[0]
+        if attempt_status == "ready":
+            break
+        assert work_once(app) == 1
+    assert attempt_status == "ready"
+    view = client.get("/api/wallet/topups/" + order_id)
+    assert view.status_code == 200
+    assert view.json["payment_url"] == "https://checkout.example.test/pay"
+    assert wallet(client)["balance"] == 0
+    with connect(app.config["DATABASE"]) as db:
+        invoice_notifications = db.execute(
+            "SELECT count(*) FROM outbox WHERE event='invoice.ready'"
+        ).fetchone()[0]
+    assert invoice_notifications == 0
+    assert len([x for x in requests if x[1].endswith("/api/v3/invoice")]) == 1
+    assert not any(
+        x[1].endswith("/sendMessage") and "checkout.example" in str(x[2])
+        for x in requests
+    )
+    replay = client.post(
+        "/api/orders/" + order_id + "/checkout",
+        json={"email": "buyer@example.test"},
+    )
+    assert replay.status_code == 200
+    assert replay.json["id"] == attempt.json["id"]
+
+
+def test_verified_provider_lookup_creates_ledger_credit(app, client_and_admin):
+    client, admin = client_and_admin
+    publish_policy(app)
+    order = topup(client)
+    attempt = client.post(
+        "/api/orders/" + order.json["id"] + "/checkout",
+        json={"email": "buyer@example.test"},
+    )
+    assert attempt.status_code == 202
+    calls = []
+
+    def fake_remote(method, url, data, headers):
+        calls.append((method, url))
+        if method == "GET" and "/api/v1/invoices/" in url:
+            return {
+                "id": "paid-invoice-1",
+                "status": "completed",
+                "datetime": "2026-11-14T07:08:20Z",
+                "receipt": {"amount": "150", "currency": "RUB"},
+            }
+        return {"ok": True, "result": None}
+
+    app.config["HTTP_TRANSPORT"] = fake_remote
+    with transaction(app.config["DATABASE"]) as db:
+        from marina.db import object_get, update
+
+        payment = object_get(db, attempt.json["id"], "payment_attempt", owner_id(client))
+        payment = update(
+            db, payment, app.clock[0],
+            {**payment["data"], "provider_id": "paid-invoice-1"},
+            "ready",
+        )
+        result = check_lava(app, db, payment, app.clock[0])
+        assert result["status"] == "paid"
+    assert wallet(client)["balance"] == 150
+    assert calls == [("GET", "https://gate.lava.top/api/v1/invoices/paid-invoice-1")]
 
 
 def test_verified_lava_receipt_auto_purchases_only_once(app, client_and_admin):
