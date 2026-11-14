@@ -197,11 +197,7 @@ def register_providers(app):
             "total": d["total"],
             "title": product["title"],
             "terms": product["terms"],
-            "return_path": (
-                "/wallet"
-                if product.get("service") == "neurocoins"
-                else "/"
-            ),
+            "return_path": ("/wallet" if product.get("service") == "neurocoins" else "/"),
         }
         if d["provider"] == "lava":
             require(
