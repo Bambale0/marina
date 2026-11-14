@@ -21,6 +21,7 @@ def app(tmp_path):
 def client_and_admin(app):
     app.config.update(
         NEUROCOINS_LAVA_ENABLED=True,
+        NEUROCOINS_BOT_SPEND_ENABLED=True,
         LAVA_API_KEY="fixture-key",
         LAVA_WEBHOOK_SECRET="fixture-secret",
         PUBLIC_URL="https://fixture.example",
