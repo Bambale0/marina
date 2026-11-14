@@ -107,7 +107,8 @@ def test_wallet_is_read_only_until_payment_ledger_is_live(app):
     messages = capture(app)
     bot = Bot(app, {"id": 2}, 2, "wallet-read-only")
     bot.action("wallet", {})
-    assert "не подключ" in messages[-1]["text"].lower()
+    assert "не опубликованы" in messages[-1]["text"].lower()
+    assert "0 Нейро-коинов" in messages[-1]["text"]
     with connect(app.config["DATABASE"]) as db:
         assert db.execute("SELECT count(*) FROM objects WHERE kind='order'").fetchone()[0] == 0
         assert db.execute("SELECT count(*) FROM receipts").fetchone()[0] == 0
