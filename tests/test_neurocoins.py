@@ -189,8 +189,13 @@ def test_policy_rejects_stars_and_invalid_amounts(app):
             {
                 **valid,
                 "packages": [
-                    {"id": "p150", "title": "Stars plus Lava", "coins": 150,
-                     "lava_offer_id": "fixture", "stars": 150}
+                    {
+                        "id": "p150",
+                        "title": "Stars plus Lava",
+                        "coins": 150,
+                        "lava_offer_id": "fixture",
+                        "stars": 150,
+                    }
                 ],
             }
         )
