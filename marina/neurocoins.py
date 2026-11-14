@@ -343,7 +343,12 @@ def register_neurocoins(app):
 
         link = (
             attempt["data"].get("url")
-            if attempt and attempt["status"] == "ready" and checkout_open(g.db, order, g.now)
+            if (
+                attempt
+                and attempt["status"] == "ready"
+                and checkout_open(g.db, order, g.now)
+                and app.config.get("NEUROCOINS_LAVA_ENABLED") is True
+            )
             else None
         )
         return {
