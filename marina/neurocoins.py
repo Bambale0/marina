@@ -305,6 +305,7 @@ def register_neurocoins(app):
             "currency": "NEURO",
             "balance": balance(g.db, g.actor["id"]),
             "enabled": bool(policy),
+            "spend_enabled": bool(policy) and app.config.get("NEUROCOINS_BOT_SPEND_ENABLED") is True,
             "packages": policy["data"]["packages"] if policy else [],
             "services": policy["data"]["services"] if policy else [],
             "history": [dict(x) for x in history],
@@ -440,6 +441,10 @@ def register_neurocoins(app):
     @app.post("/api/wallet/bookings/<id>/pay")
     @protected()
     def pay_booking(id):
+        require(
+            app.config.get("NEUROCOINS_BOT_SPEND_ENABLED") is True,
+            "Оплата Нейро-коинами внутри Telegram пока не разрешена", 403,
+        )
         d = body()
         key = d.get("key")
         require(isinstance(key, str) and 4 <= len(key) <= 120, "Укажите ключ операции")
