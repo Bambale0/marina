@@ -161,6 +161,60 @@ def test_policy_rejects_stars_and_invalid_amounts(app):
         )
 
 
+def test_admin_publishes_pack_and_tariff_through_existing_workflow(
+    app, client_and_admin
+):
+    client, admin = client_and_admin
+    data = {
+        "type": "neurocoins",
+        "enabled": True,
+        "currency": "RUB",
+        "terms": "Утвержденные условия",
+        "quote_ttl_seconds": 3600,
+        "packages": [
+            {"id": "p150", "title": "150 НК", "coins": 150,
+             "lava_offer_id": "fixture-offer"}
+        ],
+        "services": [
+            {"id": "online_lesson", "title": "Занятие", "coins": 120}
+        ],
+    }
+    created = admin.post(
+        "/api/admin/content",
+        json={"kind": "policy", "title": "Нейро-коины", "data": data,
+              "reason": "Тест создания тарифов"},
+    )
+    assert created.status_code == 201, created.json
+    approved = admin.post(
+        "/api/admin/content/" + created.json["id"] + "/approve",
+        json={"revision": created.json["revision"], "reason": "Тест одобрения"},
+    )
+    assert approved.status_code == 200, approved.json
+    published = admin.post(
+        "/api/admin/content/" + created.json["id"] + "/publish",
+        json={"revision": approved.json["revision"], "reason": "Тест публикации"},
+    )
+    assert published.status_code == 200, published.json
+    current = wallet(client)
+    assert current["enabled"] is True
+    assert current["packages"][0]["coins"] == 150
+    assert current["services"][0]["coins"] == 120
+
+
+def test_bot_spend_gate_stays_closed_when_policy_is_published(app, client_and_admin):
+    client, admin = client_and_admin
+    publish_policy(app)
+    booking = booking_confirmed(app, client, admin)
+    app.config["NEUROCOINS_BOT_SPEND_ENABLED"] = False
+    assert wallet(client)["spend_enabled"] is False
+    response = client.post(
+        "/api/wallet/bookings/" + booking["id"] + "/pay",
+        json={"key": "should-not-spend"},
+    )
+    assert response.status_code == 403
+    assert wallet(client)["balance"] == 0
+
+
 def test_admin_adjustment_requires_real_admin_and_is_idempotent(app, client_and_admin):
     client, admin = client_and_admin
     person = owner_id(client)
