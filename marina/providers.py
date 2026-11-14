@@ -94,15 +94,14 @@ def invoice(app, attempt):
     return_path = d.get("return_path", "/")
     require(return_path in ("/", "/wallet"), "Неверная страница возврата")
     if return_path == "/wallet":
-        from .neurocoins import external_origin
+        from .neurocoins import configured_web_origin
 
+        return_origin = configured_web_origin(app)
         require(
-            app.config.get("NEUROCOINS_LAVA_ENABLED") is True
-            and external_origin(app),
+            app.config.get("NEUROCOINS_LAVA_ENABLED") is True and return_origin,
             "Веб-кабинет пополнения недоступен",
             403,
         )
-        return_origin = app.config["NEUROCOINS_WEB_ORIGIN"]
     else:
         return_origin = app.config["PUBLIC_URL"]
     return_base = return_origin.rstrip("/") + return_path
