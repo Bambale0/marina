@@ -132,7 +132,7 @@ async function loadWallet() {
       const items = (await api("/history")).items || [];
       for (const item of items) {
         if (item.kind === "booking" && item.status === "confirmed"
-          && item.data?.booking_kind === "online_lesson" && item.data?.paid_at == null) {
+          && item.data && item.data.booking_kind === "online_lesson" && item.data.paid_at == null) {
           bookingSelect.append(make("option", { value: item.id },
             "Автоматически оплатить онлайн-занятие (" + payForBooking.coins + " НК)"));
         }
