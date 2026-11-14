@@ -412,3 +412,5 @@ a {
   display: grid;
   gap: 16px;
 }
+
+.wallet-terms { white-space: pre-wrap; }
