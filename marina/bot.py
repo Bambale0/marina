@@ -1,5 +1,6 @@
 """Telegram polling adapter. Only verified getUpdates data reaches trusted_client."""
 
+import hashlib
 import io
 import json
 import secrets
@@ -2643,10 +2644,35 @@ class Bot:
         if text == "/profiles":
             return self.action("profiles", {})
         if text == "/login":
-            self.require_admin()
+            if self.user["id"] in self.app.config["ADMIN_TELEGRAM_IDS"]:
+                return self.send(
+                    "Управление специалиста доступно прямо в Telegram.",
+                    [("Открыть админку", "admin_menu", {})],
+                )
+            require(
+                self.chat == self.user["id"],
+                "Код входа можно получить только в личном чате с ботом",
+                403,
+            )
+            code = secrets.token_urlsafe(32)
+            with transaction(self.app.config["DATABASE"]) as db:
+                db.execute("DELETE FROM login_codes WHERE account_id=?", (self.owner,))
+                db.execute(
+                    "INSERT INTO login_codes(digest,account_id,expires) VALUES(?,?,?)",
+                    (hashlib.sha256(code.encode()).hexdigest(), self.owner, self.now + 300),
+                )
+                audit(
+                    db,
+                    self.owner,
+                    "auth.web_code_created",
+                    {"id": self.owner, "revision": 1},
+                    self.now,
+                    "Одноразовый вход в веб-кабинет",
+                )
             return self.send(
-                "Mini App не используется. Управление доступно прямо в Telegram.",
-                [("Открыть админку", "admin_menu", {})],
+                "Одноразовый код входа в веб-кабинет (действует 5 минут):\\n"
+                + code
+                + "\\nНикому не пересылайте его.",
             )
         step = self.state["data"].get("step")
         from .specialist_result_bot import handle_message as handle_specialist_message
