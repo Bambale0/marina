@@ -142,6 +142,9 @@ def test_external_wallet_page_is_visible_but_checkout_disabled_by_default(app):
     assert response.status_code == 200
     assert b"wallet.js" in response.data
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    static_response = app.test_client().get("/static/wallet.html")
+    assert static_response.status_code == 200
+    assert "frame-ancestors 'none'" in static_response.headers["Content-Security-Policy"]
     assert (
         app.test_client().post("/api/wallet/topups", json={"surface": "external_web"}).status_code
         == 401
