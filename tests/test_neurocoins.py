@@ -577,9 +577,15 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
             assert data["currency"] == "RUB"
             assert data["amount"] == 150
             assert data["offerId"] == "offer-fixture"
-            assert data["successful_return_url"].endswith("/wallet?payment=success")
-            assert data["failure_return_url"].endswith("/wallet?payment=failed")
-            assert data["cancel_return_url"].endswith("/wallet?payment=cancelled")
+            assert data["successful_return_url"] == (
+                "https://wallet.example.test/wallet?payment=success"
+            )
+            assert data["failure_return_url"] == (
+                "https://wallet.example.test/wallet?payment=failed"
+            )
+            assert data["cancel_return_url"] == (
+                "https://wallet.example.test/wallet?payment=cancelled"
+            )
             return {"id": "lava-sandbox", "paymentUrl": "https://checkout.example.test/pay"}
         return {"ok": True, "result": {"message_id": len(requests)}}
 
