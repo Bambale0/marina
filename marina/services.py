@@ -491,7 +491,12 @@ def register_services(app):
             "preferences": d.get("preferences", ""),
             "proposals": [],
             "current_proposal": None,
+            **({"booking_kind": "online_lesson"} if d.get("booking_kind") == "online_lesson" else {}),
         }
+        require(
+            d.get("booking_kind") in (None, "online_lesson"),
+            "Неизвестный тип записи",
+        )
 
         def create():
             obj = insert(g.db, "booking", payload, g.now, g.actor["id"], s["id"], "requested")
@@ -601,6 +606,9 @@ def register_services(app):
         )
         emit(g.db, obj["owner"], id, "booking." + action, g.now)
         if action == "cancel":
+            from .neurocoins import refund_booking
+
+            refund_booking(g.db, result, g.now, g.actor["id"], why)
             cancel_booking_payments(g.db, result, g.now, g.actor["id"], why)
         from .crm import sync_booking
 
@@ -659,6 +667,9 @@ def register_services(app):
         )
         emit(g.db, obj["owner"], id, "booking." + action, g.now)
         if action == "cancel":
+            from .neurocoins import refund_booking
+
+            refund_booking(g.db, result, g.now, g.actor["id"], "Возврат за отменённое онлайн-занятие")
             cancel_booking_payments(
                 g.db, result, g.now, g.actor["id"], "Решение клиента об отмене встречи"
             )
