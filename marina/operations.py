@@ -252,7 +252,11 @@ def notify(app, owner, object_id, event):
             "sendMessage",
             {
                 "chat_id": account["telegram_id"],
-                "text": "Счёт готов. Оплатите на защищённой странице Lava.top:",
+                "text": (
+                    "Счёт готов. Оплатите в Telegram Stars:"
+                    if attempt["data"]["provider"] == "stars"
+                    else "Счёт готов. Оплатите на защищённой странице Lava.top:"
+                ),
                 "reply_markup": {
                     "inline_keyboard": [[{"text": caption, "url": attempt["data"]["url"]}]]
                 },
