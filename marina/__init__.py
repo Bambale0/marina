@@ -191,6 +191,12 @@ def create_app(config=None):
                 "Content-Security-Policy": "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org",
             }
         )
+        if request.path == "/wallet":
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self' data:; connect-src 'self'; form-action 'self'; "
+                "frame-ancestors 'none'"
+            )
         if (
             response.is_json
             and request.path.startswith("/api/")
