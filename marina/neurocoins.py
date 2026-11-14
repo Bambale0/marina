@@ -353,6 +353,7 @@ def register_neurocoins(app):
         ).fetchall()
         return {
             "currency": "NEURO",
+            "policy_id": policy["id"] if policy else None,
             "balance": balance(g.db, g.actor["id"]),
             "enabled": bool(policy),
             "web_topup_enabled": bool(policy)
@@ -427,6 +428,11 @@ def register_neurocoins(app):
         )
         p = active_policy(g.db)
         require(p, "Пополнение монет пока не опубликовано", 409)
+        require(
+            d.get("terms_accepted") is True and d.get("policy_id") == p["id"],
+            "Подтвердите актуальные условия использования Нейро-коинов",
+            422,
+        )
         ops = policies(g.db, "operations")
         require(not ops or not ops["data"].get("pause_sales"), "Продажи приостановлены", 409)
         pack = next(
@@ -491,6 +497,7 @@ def register_neurocoins(app):
                         "lava_offer_id": offer,
                     },
                     "policy_id": p["id"],
+                    "terms_accepted_at": g.now,
                     "coin_pack": snapshot,
                     "lines": [
                         {"id": uid(), "subject_id": g.actor["id"], "amount": pack["coins"] * 100}
