@@ -593,9 +593,7 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
     leaked = client.get("/api/wallet/topups/" + order_id)
     assert leaked.status_code == 200
     assert leaked.json["payment_url"] is None
-    view = client.get(
-        "/api/wallet/topups/" + order_id, base_url="https://wallet.example.test"
-    )
+    view = client.get("/api/wallet/topups/" + order_id, base_url="https://wallet.example.test")
     assert view.status_code == 200
     assert view.json["payment_url"] == "https://checkout.example.test/pay"
     app.config["NEUROCOINS_LAVA_ENABLED"] = False
