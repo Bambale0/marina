@@ -491,7 +491,11 @@ def register_services(app):
             "preferences": d.get("preferences", ""),
             "proposals": [],
             "current_proposal": None,
-            **({"booking_kind": "online_lesson"} if d.get("booking_kind") == "online_lesson" else {}),
+            **(
+                {"booking_kind": "online_lesson"}
+                if d.get("booking_kind") == "online_lesson"
+                else {}
+            ),
         }
         require(
             d.get("booking_kind") in (None, "online_lesson"),
@@ -669,7 +673,9 @@ def register_services(app):
         if action == "cancel":
             from .neurocoins import refund_booking
 
-            refund_booking(g.db, result, g.now, g.actor["id"], "Возврат за отменённое онлайн-занятие")
+            refund_booking(
+                g.db, result, g.now, g.actor["id"], "Возврат за отменённое онлайн-занятие"
+            )
             cancel_booking_payments(
                 g.db, result, g.now, g.actor["id"], "Решение клиента об отмене встречи"
             )
