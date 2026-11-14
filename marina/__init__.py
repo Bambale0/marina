@@ -541,6 +541,9 @@ def create_app(config=None):
 
     register_providers(app)
     register_operations(app)
+    from .neurocoins import register_neurocoins
+
+    register_neurocoins(app)
     from .privacy import register_privacy
 
     register_privacy(app)
