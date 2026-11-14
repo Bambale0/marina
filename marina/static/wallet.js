@@ -200,4 +200,12 @@ async function showPaymentStatus() {
   root.prepend(status);
 }
 
-loadWallet().catch((error) => showError(error.message));
+loadWallet()
+  .then(async () => {
+    // A redirect status is never a payment confirmation; only the verified
+    // server receipt can update the balance.
+    if (token && currentOrder && new URLSearchParams(location.search).has("payment")) {
+      await showPaymentStatus();
+    }
+  })
+  .catch((error) => showError(error.message));
