@@ -5,8 +5,9 @@ are published via an approved policy. Only verified provider receipts mint coins
 """
 
 import re
+from urllib.parse import urlsplit
 
-from flask import g
+from flask import g, request
 
 from . import body, object_get, protected, reason, require
 from .commerce import policies, provider_enabled
@@ -14,7 +15,45 @@ from .db import audit, emit, insert, uid, update
 from .screening import idempotent
 
 MAX_ENTRY = 1_000_000_000
-PACK_ID = re.compile(r"[a-z][a-z0-9_-]{1,47}\Z")
+PACK_ID = re.compile(r"[a-z][a-z0-9_-]{1,47}\\Z")
+
+
+def external_origin(app, *, require_post=False):
+    """Extra browser boundary: never treat user-provided 'surface' as proof.
+
+    This check cannot establish whether a service is eligible for a
+    third-party payment provider under Telegram policy.
+    """
+    origin = app.config.get("NEUROCOINS_WEB_ORIGIN") or ""
+    parsed = urlsplit(origin)
+    if not (
+        parsed.scheme == "https"
+        and parsed.netloc
+        and parsed.path in ("", "/")
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+        and request.host == parsed.netloc
+        and request.is_secure
+    ):
+        return False
+    if not require_post:
+        return True
+    return (
+        request.headers.get("Origin") == origin.rstrip("/")
+        and request.headers.get("Sec-Fetch-Site") == "same-origin"
+        and request.headers.get("Sec-Fetch-Mode") == "cors"
+    )
+
+
+def require_external_checkout(app):
+    require(
+        external_origin(app, require_post=True),
+        "Пополнение доступно только из самостоятельного веб-кабинета",
+        403,
+    )
+
 
 
 def validate_policy(d):
@@ -316,6 +355,9 @@ def register_neurocoins(app):
             "currency": "NEURO",
             "balance": balance(g.db, g.actor["id"]),
             "enabled": bool(policy),
+            "web_topup_enabled": bool(policy)
+            and app.config.get("NEUROCOINS_LAVA_ENABLED") is True
+            and external_origin(app),
             "spend_enabled": bool(policy)
             and app.config.get("NEUROCOINS_BOT_SPEND_ENABLED") is True,
             "packages": policy["data"]["packages"] if policy else [],
@@ -374,6 +416,7 @@ def register_neurocoins(app):
             "Оплата Lava.top недоступна в Telegram",
             403,
         )
+        require_external_checkout(app)
         require(provider_enabled(app, "lava"), "Приём платежей Lava.top отключён", 503)
         require(
             app.config.get("LAVA_API_KEY")
