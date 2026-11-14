@@ -434,6 +434,11 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
     view = client.get("/api/wallet/topups/" + order_id)
     assert view.status_code == 200
     assert view.json["payment_url"] == "https://checkout.example.test/pay"
+    app.config["NEUROCOINS_LAVA_ENABLED"] = False
+    hidden = client.get("/api/wallet/topups/" + order_id)
+    assert hidden.status_code == 200
+    assert hidden.json["payment_url"] is None
+    app.config["NEUROCOINS_LAVA_ENABLED"] = True
     assert wallet(client)["balance"] == 0
     with connect(app.config["DATABASE"]) as db:
         invoice_notifications = db.execute(
@@ -450,6 +455,39 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
     )
     assert replay.status_code == 200
     assert replay.json["id"] == attempt.json["id"]
+
+
+def test_disabling_lava_suppresses_queued_invoice_without_provider_call(
+    app, client_and_admin
+):
+    client, admin = client_and_admin
+    publish_policy(app)
+    order = topup(client)
+    assert order.status_code == 201
+    attempt = client.post(
+        "/api/orders/" + order.json["id"] + "/checkout",
+        json={"email": "buyer@example.test"},
+    )
+    assert attempt.status_code == 202, attempt.json
+    app.config["NEUROCOINS_LAVA_ENABLED"] = False
+
+    def no_provider(*args):
+        pytest.fail("Suspended Lava invoice reached provider")
+
+    app.config["HTTP_TRANSPORT"] = no_provider
+    for _ in range(12):
+        with connect(app.config["DATABASE"]) as db:
+            status = db.execute(
+                "SELECT status FROM objects WHERE id=?", (attempt.json["id"],)
+            ).fetchone()[0]
+        if status != "queued":
+            break
+        assert work_once(app) == 1
+    assert status == "cancelled"
+    assert wallet(client)["balance"] == 0
+    view = client.get("/api/wallet/topups/" + order.json["id"])
+    assert view.status_code == 200
+    assert view.json["payment_url"] is None
 
 
 def test_verified_provider_lookup_creates_ledger_credit(app, client_and_admin):
