@@ -392,6 +392,13 @@ def work_once(app, send=None):
             if attempt["status"] == "queued" and (
                 not checkout_open(db, order, now)
                 or not provider_enabled(app, attempt["data"]["provider"])
+                or (
+                    order["data"].get("product_snapshot", {}).get("service") == "neurocoins"
+                    and (
+                        app.config.get("NEUROCOINS_LAVA_ENABLED") is not True
+                        or order["data"].get("surface") != "external_web"
+                    )
+                )
             ):
                 update(db, attempt, now, status="cancelled")
                 db.execute(
