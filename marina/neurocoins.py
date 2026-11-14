@@ -395,6 +395,7 @@ def register_neurocoins(app):
                 and attempt["status"] == "ready"
                 and checkout_open(g.db, order, g.now)
                 and app.config.get("NEUROCOINS_LAVA_ENABLED") is True
+                and external_origin(app)
             )
             else None
         )
