@@ -150,6 +150,8 @@ def create_app(config=None):
         DEV_OFFER_BYPASSES_CONSENT=os.getenv("DEV_OFFER_BYPASSES_CONSENT") == "1",
         DEV_TRIPWIRE_BYPASS_PAYMENT=os.getenv("DEV_TRIPWIRE_BYPASS_PAYMENT") == "1",
         SALES_ENABLED=False,
+        NEUROCOINS_LAVA_ENABLED=os.getenv("NEUROCOINS_LAVA_ENABLED") == "1",
+        NEUROCOINS_BOT_SPEND_ENABLED=os.getenv("NEUROCOINS_BOT_SPEND_ENABLED") == "1",
     )
     if config:
         app.config.update(config)
@@ -541,6 +543,9 @@ def create_app(config=None):
 
     register_providers(app)
     register_operations(app)
+    from .neurocoins import register_neurocoins
+
+    register_neurocoins(app)
     from .privacy import register_privacy
 
     register_privacy(app)

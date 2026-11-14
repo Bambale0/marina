@@ -220,6 +220,44 @@ def notify(app, owner, object_id, event):
             obj = object_get(db, object_id)
         if obj["kind"] == "right" and obj["data"].get("service") == "guide":
             return
+        if obj["kind"] == "neurocoin_credit":
+            from .neurocoins import balance
+
+            with connect(app.config["DATABASE"]) as db:
+                order = object_get(db, obj["data"]["order_id"], "order", owner)
+                account = db.execute(
+                    "SELECT telegram_id FROM accounts WHERE id=?", (owner,)
+                ).fetchone()
+                booking_id = order["data"].get("auto_booking_id")
+                lesson_paid = False
+                if booking_id:
+                    booking = object_get(db, booking_id, "booking", owner)
+                    lesson_paid = (
+                        booking["data"].get("payment_source") == "neurocoins"
+                        and booking["data"].get("paid_at") is not None
+                    )
+                current = balance(db, owner)
+            require(account, "Получатель не найден")
+            message = (
+                "✅ Подтверждено пополнение Lava.top: +"
+                + str(obj["data"]["coins"])
+                + " Нейро-коинов."
+                + "\nБаланс: "
+                + str(current)
+                + " НК."
+            )
+            if lesson_paid:
+                message += "\nОнлайн-занятие оплачено автоматически."
+            elif booking_id:
+                message += (
+                    "\nАвтоматическая покупка не выполнена: "
+                    "проверьте заявку; монеты сохранены на балансе."
+                )
+            return telegram(
+                app,
+                "sendMessage",
+                {"chat_id": account["telegram_id"], "text": message},
+            )
     if event == "crm.video_received":
         from .crm import notify_review_video
 
@@ -237,6 +275,10 @@ def notify(app, owner, object_id, event):
         with connect(app.config["DATABASE"]) as db:
             attempt = object_get(db, object_id, "payment_attempt", owner)
             order = object_get(db, attempt["data"]["order_id"], "order", owner)
+            if order["data"].get("product_snapshot", {}).get("service") == "neurocoins":
+                # External checkout status is shown by the external web application.
+                # Do not send a Lava purchase link into Telegram.
+                return
             if (
                 attempt["status"] != "ready"
                 or not provider_enabled(app, attempt["data"]["provider"])
@@ -252,7 +294,11 @@ def notify(app, owner, object_id, event):
             "sendMessage",
             {
                 "chat_id": account["telegram_id"],
-                "text": "Счёт готов. Оплатите на защищённой странице Lava.top:",
+                "text": (
+                    "Счёт готов. Оплатите в Telegram Stars:"
+                    if attempt["data"]["provider"] == "stars"
+                    else "Счёт готов. Оплатите на защищённой странице Lava.top:"
+                ),
                 "reply_markup": {
                     "inline_keyboard": [[{"text": caption, "url": attempt["data"]["url"]}]]
                 },
@@ -304,6 +350,9 @@ def notify(app, owner, object_id, event):
     if event.startswith("booking."):
         with connect(app.config["DATABASE"]) as db:
             booking = object_get(db, object_id, "booking", owner)
+        if event == "booking.paid" and booking["data"].get("payment_source") == "neurocoins":
+            # Synchronous bot payment and the top-up receipt notification cover this.
+            return
         if booking["data"].get("review_id") or booking["data"].get("run_id"):
             from .crm import notify_crm
 
@@ -343,6 +392,13 @@ def work_once(app, send=None):
             if attempt["status"] == "queued" and (
                 not checkout_open(db, order, now)
                 or not provider_enabled(app, attempt["data"]["provider"])
+                or (
+                    order["data"].get("product_snapshot", {}).get("service") == "neurocoins"
+                    and (
+                        app.config.get("NEUROCOINS_LAVA_ENABLED") is not True
+                        or order["data"].get("surface") != "external_web"
+                    )
+                )
             ):
                 update(db, attempt, now, status="cancelled")
                 db.execute(
@@ -414,7 +470,10 @@ def work_once(app, send=None):
 
                     run = object_get(db, order["data"]["run_id"], "funnel_run")
                     schedule(db, run, "funnel.invoice." + attempt["id"], now)
-                elif attempt["data"]["provider"] == "lava":
+                elif (
+                    attempt["data"]["provider"] == "lava"
+                    and order["data"].get("product_snapshot", {}).get("service") != "neurocoins"
+                ):
                     emit(db, attempt["owner"], attempt["id"], "invoice.ready", now)
             state = "sent" if outcome == "sent" else "failed"
             if outcome == "failed":

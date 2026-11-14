@@ -1202,11 +1202,85 @@ class Bot:
                 )
         elif action == "wallet":
             self.state_set(step=None)
+            data = self.api("/wallet")
+            text = (
+                "🧠 Баланс: " + str(data["balance"]) + " Нейро-коинов.\n"
+                "1 НК = 1 ₽ для расчёта стоимости услуг. "
+                "Монеты нельзя перевести или вывести в деньги."
+            )
+            buttons = []
+            if data["enabled"]:
+                services = {x["id"]: x for x in data["services"]}
+                if data["spend_enabled"] and "online_lesson" in services:
+                    bookings = [
+                        x
+                        for x in self.api("/history")["items"]
+                        if x["kind"] == "booking"
+                        and x["status"] == "confirmed"
+                        and x["data"].get("booking_kind") == "online_lesson"
+                        and x["data"].get("paid_at") is None
+                    ]
+                    for b in bookings[:5]:
+                        buttons.append(
+                            (
+                                "📅 Занятие · " + str(services["online_lesson"]["coins"]) + " НК",
+                                "wallet_pay_booking",
+                                {"id": b["id"]},
+                            )
+                        )
+                text += (
+                    "\n\nПополнение через Lava.top готовится для отдельного "
+                    "разрешённого платёжного сценария; внутри Telegram недоступно."
+                )
+            else:
+                text += "\n\nНовые пополнения и оплаты пока не опубликованы."
+            if data["history"]:
+                text += "\n\nПоследние операции:\n" + "\n".join(
+                    ("+" if x["delta"] > 0 else "") + str(x["delta"]) + " НК · " + x["source"]
+                    for x in data["history"][:5]
+                )
+            self.send(text, buttons + [("Мои обращения", "history", {}), ("В меню", "menu", {})])
+        elif action == "wallet_pay_booking":
+            wallet = self.api("/wallet")
+            tariff = next((x for x in wallet["services"] if x["id"] == "online_lesson"), None)
+            booking = self.api("/bookings/" + d["id"])
+            require(
+                tariff
+                and booking["status"] == "confirmed"
+                and booking["data"].get("booking_kind") == "online_lesson"
+                and booking["data"].get("paid_at") is None,
+                "Запись недоступна для оплаты Нейро-коинами",
+                409,
+            )
+            missing = max(0, tariff["coins"] - wallet["balance"])
+            if missing:
+                return self.send(
+                    "Не хватает " + str(missing) + " НК. "
+                    "Пополнение через Lava.top внутри Telegram отключено. "
+                    "Автопокупка после проверенного пополнения предусмотрена "
+                    "только в разрешённом внешнем платёжном сценарии.",
+                    [("Мой кошелёк", "wallet", {})],
+                )
             self.send(
-                "Кошелёк пока не подключён: денежный баланс не ведётся, "
-                "пополнения и оплата из кошелька недоступны. "
-                "Историю существующих заказов можно посмотреть в разделе «Мои обращения».",
-                [("Мои обращения", "history", {}), ("В меню", "menu", {})],
+                "Подтвердить списание "
+                + str(tariff["coins"])
+                + " НК за онлайн-занятие? Остаток: "
+                + str(wallet["balance"])
+                + " НК.",
+                [
+                    ("✅ Оплатить Нейро-коинами", "wallet_pay_confirm", {"id": d["id"]}),
+                    ("Вернуться", "wallet", {}),
+                ],
+            )
+        elif action == "wallet_pay_confirm":
+            result = self.api(
+                "/wallet/bookings/" + d["id"] + "/pay",
+                "POST",
+                {"key": "bot:" + self.update_id},
+            )
+            self.send(
+                "Занятие оплачено. Остаток: " + str(result["balance"]) + " НК.",
+                [("Мой кошелёк", "wallet", {}), ("В меню", "menu", {})],
             )
         elif action == "profiles":
             if not self.privacy_gate():
@@ -2547,6 +2621,8 @@ class Bot:
             return self.action("services", {})
         if text == "/wallet":
             return self.action("wallet", {})
+        if text == "/coins":
+            return self.action("wallet", {})
         if text == "/id":
             return self.send("Ваш Telegram ID: " + str(self.user["id"]))
         if text == "/admin":
@@ -3146,6 +3222,11 @@ class Bot:
                         "subject_id": s["id"],
                         "topic": self.state["data"]["topic"],
                         "preferences": text,
+                        **(
+                            {"booking_kind": "online_lesson"}
+                            if self.state["data"].get("booking_kind") == "online_lesson"
+                            else {}
+                        ),
                         "key": "bot:" + self.update_id,
                     },
                 )
