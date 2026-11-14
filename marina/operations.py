@@ -240,8 +240,11 @@ def notify(app, owner, object_id, event):
             require(account, "Получатель не найден")
             message = (
                 "✅ Подтверждено пополнение Lava.top: +"
-                + str(obj["data"]["coins"]) + " Нейро-коинов."
-                + "\nБаланс: " + str(current) + " НК."
+                + str(obj["data"]["coins"])
+                + " Нейро-коинов."
+                + "\nБаланс: "
+                + str(current)
+                + " НК."
             )
             if lesson_paid:
                 message += "\nОнлайн-занятие оплачено автоматически."
@@ -251,7 +254,8 @@ def notify(app, owner, object_id, event):
                     "проверьте заявку; монеты сохранены на балансе."
                 )
             return telegram(
-                app, "sendMessage",
+                app,
+                "sendMessage",
                 {"chat_id": account["telegram_id"], "text": message},
             )
     if event == "crm.video_received":
