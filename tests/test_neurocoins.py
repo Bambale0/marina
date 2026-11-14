@@ -388,10 +388,12 @@ def test_verified_provider_lookup_creates_ledger_credit(app, client_and_admin):
         return {"ok": True, "result": None}
 
     app.config["HTTP_TRANSPORT"] = fake_remote
+    person = owner_id(client)
     with transaction(app.config["DATABASE"]) as db:
-        from marina.db import object_get, update
+        from marina import object_get
+        from marina.db import update
 
-        payment = object_get(db, attempt.json["id"], "payment_attempt", owner_id(client))
+        payment = object_get(db, attempt.json["id"], "payment_attempt", person)
         payment = update(
             db, payment, app.clock[0],
             {**payment["data"], "provider_id": "paid-invoice-1"},
