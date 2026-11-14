@@ -191,7 +191,7 @@ async function showPaymentStatus() {
   } else if (result.attempt_status === "uncertain") {
     status.append(make("p", {}, "Создание счёта требует проверки специалистом. Не создавайте повторный платёж."));
   } else if (result.payment_url) {
-    const link = make("a", { href: result.payment_url, target: "_blank", rel: "noopener noreferrer" }, "Перейти к оплате через Lava.top");
+    const link = make("a", { href: result.payment_url, target: "_self" }, "Перейти к оплате через Lava.top");
     status.append(link, make("p", {}, "После оплаты вернитесь сюда и проверьте статус."));
   } else {
     status.append(make("p", {}, "Счёт обрабатывается. Повторно нажмите «Проверить статус» позднее."));
