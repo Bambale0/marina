@@ -2670,9 +2670,9 @@ class Bot:
                     "Одноразовый вход в веб-кабинет",
                 )
             return self.send(
-                "Одноразовый код входа в веб-кабинет (действует 5 минут):\\n"
+                "Одноразовый код входа в веб-кабинет (действует 5 минут):\n"
                 + code
-                + "\\nНикому не пересылайте его.",
+                + "\nНикому не пересылайте его.",
             )
         step = self.state["data"].get("step")
         from .specialist_result_bot import handle_message as handle_specialist_message
