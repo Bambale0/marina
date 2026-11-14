@@ -40,9 +40,7 @@ def publish_policy(app, *, enabled=True, coins=150, price=120):
         "packages": [
             {"id": "p150", "title": "150 НК", "coins": coins, "lava_offer_id": "offer-fixture"}
         ],
-        "services": [
-            {"id": "online_lesson", "title": "Занятие", "coins": price}
-        ],
+        "services": [{"id": "online_lesson", "title": "Занятие", "coins": price}],
     }
     with transaction(app.config["DATABASE"]) as db:
         return insert(db, "policy", policy, app.clock[0], status="published")
@@ -91,8 +89,7 @@ def booking_confirmed(app, client, admin):
 def topup(client, *, booking_id=None, key="fixture-topup", surface="external_web"):
     return client.post(
         "/api/wallet/topups",
-        json={"package_id": "p150", "key": key, "booking_id": booking_id,
-              "surface": surface},
+        json={"package_id": "p150", "key": key, "booking_id": booking_id, "surface": surface},
     )
 
 
@@ -100,8 +97,14 @@ def confirmed_receipt(app, order_id, *, charge="lava-charge-fixture", amount=150
     with transaction(app.config["DATABASE"]) as db:
         order = unpack(db.execute("SELECT * FROM objects WHERE id=?", (order_id,)).fetchone())
         return confirm(
-            db, order, "lava", charge, amount, "RUB",
-            app.clock[0], app.clock[0],
+            db,
+            order,
+            "lava",
+            charge,
+            amount,
+            "RUB",
+            app.clock[0],
+            app.clock[0],
         )
 
 
@@ -125,24 +128,34 @@ def test_wallet_is_private_and_empty_by_default(app):
 
 def test_policy_rejects_stars_and_invalid_amounts(app):
     valid = {
-        "type": "neurocoins", "currency": "RUB", "enabled": True,
-        "terms": "Только услуги", "quote_ttl_seconds": 3600,
-        "packages": [{"id": "p150", "title": "150 НК", "coins": 150,
-                      "lava_offer_id": "fixture"}],
+        "type": "neurocoins",
+        "currency": "RUB",
+        "enabled": True,
+        "terms": "Только услуги",
+        "quote_ttl_seconds": 3600,
+        "packages": [{"id": "p150", "title": "150 НК", "coins": 150, "lava_offer_id": "fixture"}],
         "services": [{"id": "online_lesson", "title": "Занятие", "coins": 120}],
     }
     validate_policy(valid)
     with pytest.raises(Problem):
         validate_policy({**valid, "currency": "XTR"})
     with pytest.raises(Problem):
-        validate_policy({**valid, "packages": [
-            {"id": "p150", "title": "Stars", "coins": 150, "stars": 150}]})
+        validate_policy(
+            {**valid, "packages": [{"id": "p150", "title": "Stars", "coins": 150, "stars": 150}]}
+        )
     with pytest.raises(Problem):
-        validate_policy({**valid, "packages": [
-            {"id": "p150", "title": "Пакет", "coins": True, "lava_offer_id": "fixture"}]})
+        validate_policy(
+            {
+                **valid,
+                "packages": [
+                    {"id": "p150", "title": "Пакет", "coins": True, "lava_offer_id": "fixture"}
+                ],
+            }
+        )
     with pytest.raises(Problem):
-        validate_policy({**valid, "services": [
-            {"id": "online_lesson", "title": "Пакет", "coins": -1}]})
+        validate_policy(
+            {**valid, "services": [{"id": "online_lesson", "title": "Пакет", "coins": -1}]}
+        )
 
 
 def test_admin_adjustment_requires_real_admin_and_is_idempotent(app, client_and_admin):
@@ -161,10 +174,13 @@ def test_admin_adjustment_requires_real_admin_and_is_idempotent(app, client_and_
     )
     assert conflict.status_code == 409
     app.config["ADMIN_TELEGRAM_IDS"] = set()
-    assert admin.post(
-        "/api/admin/wallet/" + person + "/adjust",
-        json={**base, "key": "adjust-456"},
-    ).status_code == 403
+    assert (
+        admin.post(
+            "/api/admin/wallet/" + person + "/adjust",
+            json={**base, "key": "adjust-456"},
+        ).status_code
+        == 403
+    )
     assert wallet(client)["balance"] == 200
 
 
@@ -197,7 +213,8 @@ def test_confirmed_booking_debit_then_cancel_refunds_once(app, client_and_admin)
     with connect(app.config["DATABASE"]) as db:
         rec = db.execute(
             "SELECT status FROM objects WHERE kind='reconciliation' "
-            "AND json_extract(data,'$.booking_id')=?", (booking["id"],)
+            "AND json_extract(data,'$.booking_id')=?",
+            (booking["id"],),
         ).fetchone()
         assert rec is not None and rec["status"] == "open"
     refund = admin.post(
@@ -217,7 +234,9 @@ def test_confirmed_booking_debit_then_cancel_refunds_once(app, client_and_admin)
             "SELECT source,count(*) FROM neurocoin_ledger GROUP BY source"
         ).fetchall()
     assert {x[0]: x[1] for x in source_counts} == {
-        "admin_adjustment": 1, "booking": 1, "booking_refund": 1
+        "admin_adjustment": 1,
+        "booking": 1,
+        "booking_refund": 1,
     }
 
 
@@ -235,9 +254,7 @@ def test_insufficient_balance_cannot_pay_or_create_debit(app, client_and_admin):
         assert db.execute("SELECT count(*) FROM neurocoin_ledger").fetchone()[0] == 0
 
 
-def test_lava_topup_is_external_only_and_never_credits_before_receipt(
-    app, client_and_admin
-):
+def test_lava_topup_is_external_only_and_never_credits_before_receipt(app, client_and_admin):
     client, admin = client_and_admin
     publish_policy(app)
     assert topup(client, surface="telegram").status_code == 403
@@ -264,9 +281,7 @@ def test_same_key_replays_pending_auto_topup_without_second_order(app, client_an
     other_key = topup(client, booking_id=booking["id"], key="other-key")
     assert other_key.status_code == 409
     with connect(app.config["DATABASE"]) as db:
-        assert db.execute(
-            "SELECT count(*) FROM objects WHERE kind='order'"
-        ).fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM objects WHERE kind='order'").fetchone()[0] == 1
 
 
 def test_existing_balance_combines_with_topup_and_auto_purchase(app, client_and_admin):
@@ -304,17 +319,14 @@ def test_verified_lava_receipt_auto_purchases_only_once(app, client_and_admin):
     confirmed_receipt(app, order.json["id"])
     assert wallet(client)["balance"] == 30
     with connect(app.config["DATABASE"]) as db:
-        ledger = list(db.execute(
-            "SELECT source,delta FROM neurocoin_ledger ORDER BY created,id"
-        ))
+        ledger = list(db.execute("SELECT source,delta FROM neurocoin_ledger ORDER BY created,id"))
     assert sorted((r["source"], r["delta"]) for r in ledger) == [
-        ("booking", -120), ("lava_credit", 150)
+        ("booking", -120),
+        ("lava_credit", 150),
     ]
 
 
-def test_cancelled_booking_preserves_lava_funds_without_auto_purchase(
-    app, client_and_admin
-):
+def test_cancelled_booking_preserves_lava_funds_without_auto_purchase(app, client_and_admin):
     client, admin = client_and_admin
     publish_policy(app)
     booking = booking_confirmed(app, client, admin)
@@ -326,13 +338,17 @@ def test_cancelled_booking_preserves_lava_funds_without_auto_purchase(
     assert result["status"] == "paid"
     assert wallet(client)["balance"] == 150
     with connect(app.config["DATABASE"]) as db:
-        assert db.execute(
-            "SELECT count(*) FROM neurocoin_ledger WHERE source='booking'"
-        ).fetchone()[0] == 0
-        assert db.execute(
-            "SELECT count(*) FROM objects WHERE kind='reconciliation' "
-            "AND json_extract(data,'$.issue')='neurocoins_booking_cancelled'"
-        ).fetchone()[0] == 0
+        assert (
+            db.execute("SELECT count(*) FROM neurocoin_ledger WHERE source='booking'").fetchone()[0]
+            == 0
+        )
+        assert (
+            db.execute(
+                "SELECT count(*) FROM objects WHERE kind='reconciliation' "
+                "AND json_extract(data,'$.issue')='neurocoins_booking_cancelled'"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_lava_mismatch_causes_reconciliation_not_credit(app, client_and_admin):
