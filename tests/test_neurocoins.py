@@ -305,9 +305,7 @@ def test_existing_balance_combines_with_topup_and_auto_purchase(app, client_and_
     assert booked["data"]["neurocoins_paid"] == 210
 
 
-def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(
-    app, client_and_admin
-):
+def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, client_and_admin):
     client, admin = client_and_admin
     publish_policy(app)
     order = topup(client)
@@ -354,8 +352,7 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(
     assert invoice_notifications == 0
     assert len([x for x in requests if x[1].endswith("/api/v3/invoice")]) == 1
     assert not any(
-        x[1].endswith("/sendMessage") and "checkout.example" in str(x[2])
-        for x in requests
+        x[1].endswith("/sendMessage") and "checkout.example" in str(x[2]) for x in requests
     )
     replay = client.post(
         "/api/orders/" + order_id + "/checkout",
@@ -395,7 +392,9 @@ def test_verified_provider_lookup_creates_ledger_credit(app, client_and_admin):
 
         payment = object_get(db, attempt.json["id"], "payment_attempt", person)
         payment = update(
-            db, payment, app.clock[0],
+            db,
+            payment,
+            app.clock[0],
             {**payment["data"], "provider_id": "paid-invoice-1"},
             "ready",
         )
