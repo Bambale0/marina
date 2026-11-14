@@ -20,10 +20,11 @@ PACK_ID = re.compile(r"[a-z][a-z0-9_-]{1,47}\Z")
 def validate_policy(d):
     require(type(d.get("enabled")) is bool, "Укажите статус кошелька")
     require(d.get("currency") == "RUB", "Один Нейро-коин соответствует одному рублю")
-    require(isinstance(d.get("terms"), str) and bool(d["terms"].strip()), "Укажите условия Нейро-коинов")
     require(
-        type(d.get("quote_ttl_seconds")) is int
-        and 60 <= d["quote_ttl_seconds"] <= 604800,
+        isinstance(d.get("terms"), str) and bool(d["terms"].strip()), "Укажите условия Нейро-коинов"
+    )
+    require(
+        type(d.get("quote_ttl_seconds")) is int and 60 <= d["quote_ttl_seconds"] <= 604800,
         "Укажите срок действия счёта",
     )
     require(isinstance(d.get("packages"), list) and len(d["packages"]) <= 50, "Проверьте пакеты")
@@ -135,20 +136,36 @@ def spend_booking(db, booking, price, policy_id, now, actor):
     require(type(price) is int and 0 < price <= MAX_ENTRY, "Некорректный тариф")
     booking = payable_booking(db, booking["owner"], booking["id"])
     movement = entry(
-        db, booking["owner"], -price, "booking", booking["id"],
-        now, actor, "Оплата занятия Нейро-коинами",
+        db,
+        booking["owner"],
+        -price,
+        "booking",
+        booking["id"],
+        now,
+        actor,
+        "Оплата занятия Нейро-коинами",
     )
     result = update(
-        db, booking, now,
+        db,
+        booking,
+        now,
         {
-            **booking["data"], "paid_at": now, "payment_source": "neurocoins",
-            "neurocoins_paid": price, "neurocoins_policy_id": policy_id,
+            **booking["data"],
+            "paid_at": now,
+            "payment_source": "neurocoins",
+            "neurocoins_paid": price,
+            "neurocoins_policy_id": policy_id,
             "neurocoins_entry_id": movement["id"],
         },
     )
     audit(
-        db, actor, "booking.neurocoins_payment", result, now,
-        "Оплачено внутренними монетами", booking["revision"],
+        db,
+        actor,
+        "booking.neurocoins_payment",
+        result,
+        now,
+        "Оплачено внутренними монетами",
+        booking["revision"],
     )
     emit(db, result["owner"], result["id"], "booking.paid", now)
     return result
@@ -174,14 +191,27 @@ def fulfill_topup(db, order, paid_at, now):
     ).fetchone()
     require(receipt, "Монеты начисляются только после подтверждения Lava.top", 409)
     movement = entry(
-        db, order["owner"], pack["coins"], "lava_credit", order["id"],
-        now, "provider:lava", "Подтверждённое поступление Lava.top",
+        db,
+        order["owner"],
+        pack["coins"],
+        "lava_credit",
+        order["id"],
+        now,
+        "provider:lava",
+        "Подтверждённое поступление Lava.top",
     )
     credit = insert(
-        db, "neurocoin_credit",
-        {"order_id": order["id"], "ledger_id": movement["id"],
-         "coins": pack["coins"], "paid_at": paid_at},
-        now, order["owner"], status="recorded",
+        db,
+        "neurocoin_credit",
+        {
+            "order_id": order["id"],
+            "ledger_id": movement["id"],
+            "coins": pack["coins"],
+            "paid_at": paid_at,
+        },
+        now,
+        order["owner"],
+        status="recorded",
     )
     auto_id = d.get("auto_booking_id")
     if auto_id:
@@ -192,13 +222,21 @@ def fulfill_topup(db, order, paid_at, now):
         try:
             booking = payable_booking(db, order["owner"], auto_id)
             spend_booking(
-                db, booking, d["auto_price_coins"],
-                d["auto_policy_id"], now, "provider:lava",
+                db,
+                booking,
+                d["auto_price_coins"],
+                d["auto_policy_id"],
+                now,
+                "provider:lava",
             )
         except Problem as exc:
             audit(
-                db, "provider:lava", "neurocoins.auto_purchase_skipped",
-                credit, now, "Зачисление сохранено; покупка не состоялась: " + exc.message,
+                db,
+                "provider:lava",
+                "neurocoins.auto_purchase_skipped",
+                credit,
+                now,
+                "Зачисление сохранено; покупка не состоялась: " + exc.message,
             )
     return credit
 
@@ -209,8 +247,15 @@ def refund_topup(db, order, charge, now):
         return
     pack = order["data"]["coin_pack"]
     entry(
-        db, order["owner"], -pack["coins"], "lava_refund", charge,
-        now, "provider:lava", "Подтверждённый возврат Lava.top", allow_negative=True,
+        db,
+        order["owner"],
+        -pack["coins"],
+        "lava_refund",
+        charge,
+        now,
+        "provider:lava",
+        "Подтверждённый возврат Lava.top",
+        allow_negative=True,
     )
 
 
@@ -237,12 +282,13 @@ def refund_booking(db, booking, now, actor, why):
             "coins": coins,
             "reason": why,
         },
-        now, booking["owner"], status="open",
+        now,
+        booking["owner"],
+        status="open",
     )
     audit(db, actor, "neurocoins.refund_review", issue, now, why)
     emit(db, booking["owner"], issue["id"], "reconciliation.created", now)
     return issue["id"]
-
 
 
 def register_neurocoins(app):
@@ -281,14 +327,16 @@ def register_neurocoins(app):
             app.config.get("LAVA_API_KEY")
             and app.config.get("LAVA_WEBHOOK_SECRET")
             and app.config.get("PUBLIC_URL", "").startswith("https://"),
-            "Lava.top или HTTPS не настроены", 503,
+            "Lava.top или HTTPS не настроены",
+            503,
         )
         p = active_policy(g.db)
         require(p, "Пополнение монет пока не опубликовано", 409)
         ops = policies(g.db, "operations")
         require(not ops or not ops["data"].get("pause_sales"), "Продажи приостановлены", 409)
         pack = next(
-            (x for x in p["data"]["packages"] if x["id"] == d.get("package_id")), None,
+            (x for x in p["data"]["packages"] if x["id"] == d.get("package_id")),
+            None,
         )
         require(pack, "Пакет отсутствует в опубликованном тарифе", 404)
         key = d.get("key")
@@ -303,14 +351,16 @@ def register_neurocoins(app):
             require(
                 existing["data"].get("coin_pack", {}).get("id") == d.get("package_id")
                 and existing["data"].get("auto_booking_id") == booking_id,
-                "Ключ уже использован для другого пополнения", 409,
+                "Ключ уже использован для другого пополнения",
+                409,
             )
             return existing, 201
         auto_price = None
         if booking_id is not None:
             payable_booking(g.db, g.actor["id"], booking_id)
             service = next(
-                (x for x in p["data"]["services"] if x["id"] == "online_lesson"), None,
+                (x for x in p["data"]["services"] if x["id"] == "online_lesson"),
+                None,
             )
             require(service, "Тариф занятия не опубликован", 409)
             auto_price = service["coins"]
@@ -321,7 +371,8 @@ def register_neurocoins(app):
                     "AND status IN ('pending','paid','paid_review')",
                     (booking_id,),
                 ).fetchone(),
-                "Для занятия уже открыт счёт на пополнение", 409,
+                "Для занятия уже открыт счёт на пополнение",
+                409,
             )
             require(balance(g.db, g.actor["id"]) < auto_price, "Баланс уже достаточен")
             require(
@@ -333,36 +384,56 @@ def register_neurocoins(app):
 
         def create():
             order = insert(
-                g.db, "order",
+                g.db,
+                "order",
                 {
-                    "intent_id": uid(), "product_id": "neurocoins:" + pack["id"],
+                    "intent_id": uid(),
+                    "product_id": "neurocoins:" + pack["id"],
                     "product_snapshot": {
-                        "service": "neurocoins", "title": pack["title"],
+                        "service": "neurocoins",
+                        "title": pack["title"],
                         "terms": p["data"]["terms"],
                         "lava_offer_id": offer,
                     },
-                    "policy_id": p["id"], "coin_pack": snapshot,
-                    "lines": [{"id": uid(), "subject_id": g.actor["id"],
-                               "amount": pack["coins"] * 100}],
-                    "total": pack["coins"] * 100, "currency": "RUB",
-                    "provider": "lava", "surface": "external_web",
+                    "policy_id": p["id"],
+                    "coin_pack": snapshot,
+                    "lines": [
+                        {"id": uid(), "subject_id": g.actor["id"], "amount": pack["coins"] * 100}
+                    ],
+                    "total": pack["coins"] * 100,
+                    "currency": "RUB",
+                    "provider": "lava",
+                    "surface": "external_web",
                     "auto_booking_id": booking_id,
                     "auto_price_coins": auto_price,
                     "auto_policy_id": p["id"] if booking_id else None,
                     "expires": g.now + p["data"]["quote_ttl_seconds"],
                 },
-                g.now, g.actor["id"], status="pending",
+                g.now,
+                g.actor["id"],
+                status="pending",
             )
             audit(
-                g.db, g.actor["id"], "neurocoins.topup_order", order,
-                g.now, "Пополнение Нейро-коинов через Lava.top",
+                g.db,
+                g.actor["id"],
+                "neurocoins.topup_order",
+                order,
+                g.now,
+                "Пополнение Нейро-коинов через Lava.top",
             )
             return order
 
         return idempotent(
-            g.db, "neurocoins-topup:" + g.actor["id"], key,
-            {"package_id": pack["id"], "coins": pack["coins"],
-             "offer": offer, "booking_id": booking_id, "price": auto_price},
+            g.db,
+            "neurocoins-topup:" + g.actor["id"],
+            key,
+            {
+                "package_id": pack["id"],
+                "coins": pack["coins"],
+                "offer": offer,
+                "booking_id": booking_id,
+                "price": auto_price,
+            },
             create,
         ), 201
 
@@ -378,7 +449,8 @@ def register_neurocoins(app):
         p = active_policy(g.db)
         require(p, "Оплата Нейро-коинами пока не включена", 409)
         service = next(
-            (x for x in p["data"]["services"] if x["id"] == "online_lesson"), None,
+            (x for x in p["data"]["services"] if x["id"] == "online_lesson"),
+            None,
         )
         require(service, "Тариф занятия не опубликован", 409)
         booking = payable_booking(g.db, g.actor["id"], id)
@@ -392,13 +464,15 @@ def register_neurocoins(app):
         why = reason(d)
         require(
             g.actor["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"],
-            "Права специалиста отозваны", 403,
+            "Права специалиста отозваны",
+            403,
         )
         booking = object_get(g.db, id, "booking")
         require(
             booking["status"] == "cancelled"
             and booking["data"].get("payment_source") == "neurocoins",
-            "Только отменённая запись, оплаченная Нейро-коинами", 409,
+            "Только отменённая запись, оплаченная Нейро-коинами",
+            409,
         )
         amount = booking["data"].get("neurocoins_paid")
         require(type(amount) is int and amount > 0, "Некорректная сумма возврата", 409)
@@ -413,19 +487,36 @@ def register_neurocoins(app):
 
         issue = unpack(issue_row)
         movement = entry(
-            g.db, booking["owner"], amount, "booking_refund", id,
-            g.now, g.actor["id"], why,
+            g.db,
+            booking["owner"],
+            amount,
+            "booking_refund",
+            id,
+            g.now,
+            g.actor["id"],
+            why,
         )
         if issue["status"] != "resolved":
             resolved = update(
-                g.db, issue, g.now,
-                {**issue["data"], "resolution": why,
-                 "resolved_by": g.actor["id"], "ledger_id": movement["id"]},
+                g.db,
+                issue,
+                g.now,
+                {
+                    **issue["data"],
+                    "resolution": why,
+                    "resolved_by": g.actor["id"],
+                    "ledger_id": movement["id"],
+                },
                 "resolved",
             )
             audit(
-                g.db, g.actor["id"], "neurocoins.refund_approved",
-                resolved, g.now, why, issue["revision"],
+                g.db,
+                g.actor["id"],
+                "neurocoins.refund_approved",
+                resolved,
+                g.now,
+                why,
+                issue["revision"],
             )
         return {"entry": movement, "balance": balance(g.db, booking["owner"])}
 
