@@ -150,7 +150,7 @@ def create_app(config=None):
         DEV_OFFER_BYPASSES_CONSENT=os.getenv("DEV_OFFER_BYPASSES_CONSENT") == "1",
         DEV_TRIPWIRE_BYPASS_PAYMENT=os.getenv("DEV_TRIPWIRE_BYPASS_PAYMENT") == "1",
         SALES_ENABLED=False,
-        NEUROCOINS_LAVA_ENABLED=False,  # explicit launch gate, not a payment shortcut
+        NEUROCOINS_LAVA_ENABLED=os.getenv("NEUROCOINS_LAVA_ENABLED") == "1",
     )
     if config:
         app.config.update(config)
