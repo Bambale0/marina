@@ -55,7 +55,6 @@ def require_external_checkout(app):
     )
 
 
-
 def validate_policy(d):
     require(type(d.get("enabled")) is bool, "Укажите статус кошелька")
     require(d.get("currency") == "RUB", "Один Нейро-коин соответствует одному рублю")
