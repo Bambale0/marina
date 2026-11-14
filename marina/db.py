@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS dedup(scope TEXT NOT NULL, key TEXT NOT NULL, object_
 CREATE TABLE IF NOT EXISTS receipts(provider TEXT NOT NULL, charge TEXT NOT NULL, order_id TEXT NOT NULL, amount INTEGER NOT NULL, currency TEXT NOT NULL, paid_at INTEGER NOT NULL, received_at INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(provider,charge));
 CREATE TABLE IF NOT EXISTS neurocoin_ledger(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(id), delta INTEGER NOT NULL CHECK(delta != 0), source TEXT NOT NULL, reference TEXT NOT NULL, created INTEGER NOT NULL, UNIQUE(source,reference));
 CREATE INDEX IF NOT EXISTS neurocoin_ledger_owner ON neurocoin_ledger(owner,created);
+CREATE TRIGGER IF NOT EXISTS neurocoin_ledger_no_update BEFORE UPDATE ON neurocoin_ledger BEGIN SELECT RAISE(ABORT,'Neurocoin ledger entries are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS neurocoin_ledger_no_delete BEFORE DELETE ON neurocoin_ledger BEGIN SELECT RAISE(ABORT,'Neurocoin ledger entries are immutable'); END;
 CREATE TABLE IF NOT EXISTS intent_fulfillments(intent_id TEXT NOT NULL, subject_id TEXT NOT NULL, order_id TEXT NOT NULL, object_id TEXT NOT NULL, PRIMARY KEY(intent_id,subject_id));
 CREATE TABLE IF NOT EXISTS fulfillments(order_id TEXT NOT NULL, line_id TEXT NOT NULL, object_id TEXT NOT NULL, PRIMARY KEY(order_id,line_id));
 CREATE TABLE IF NOT EXISTS trials(account_id TEXT PRIMARY KEY REFERENCES accounts(id), starts INTEGER NOT NULL, ends INTEGER NOT NULL);
