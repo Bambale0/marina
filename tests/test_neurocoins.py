@@ -25,12 +25,24 @@ def client_and_admin(app):
     app.config.update(
         NEUROCOINS_LAVA_ENABLED=True,
         NEUROCOINS_BOT_SPEND_ENABLED=True,
+        NEUROCOINS_WEB_ORIGIN="https://wallet.example.test",
         LAVA_API_KEY="fixture-key",
         LAVA_WEBHOOK_SECRET="fixture-secret",
         PUBLIC_URL="https://fixture.example",
         ENABLED_PAYMENT_PROVIDERS=["lava"],
     )
-    return login(app, 2), login(app, 1)
+    clients = (login(app, 2), login(app, 1))
+    for client in clients:
+        client.environ_base.update(
+            {
+                "wsgi.url_scheme": "https",
+                "HTTP_HOST": "wallet.example.test",
+                "HTTP_ORIGIN": "https://wallet.example.test",
+                "HTTP_SEC_FETCH_SITE": "same-origin",
+                "HTTP_SEC_FETCH_MODE": "cors",
+            }
+        )
+    return clients
 
 
 def publish_policy(app, *, enabled=True, coins=150, price=120):
@@ -93,7 +105,14 @@ def booking_confirmed(app, client, admin):
 def topup(client, *, booking_id=None, key="fixture-topup", surface="external_web"):
     return client.post(
         "/api/wallet/topups",
-        json={"package_id": "p150", "key": key, "booking_id": booking_id, "surface": surface},
+        json={
+            "package_id": "p150",
+            "key": key,
+            "booking_id": booking_id,
+            "surface": surface,
+            "policy_id": wallet(client)["policy_id"],
+            "terms_accepted": True,
+        },
     )
 
 
@@ -116,6 +135,68 @@ def wallet(client):
     response = client.get("/api/wallet")
     assert response.status_code == 200, response.json
     return response.json
+
+
+def test_external_wallet_page_is_visible_but_checkout_disabled_by_default(app):
+    response = app.test_client().get("/wallet")
+    assert response.status_code == 200
+    assert b"wallet.js" in response.data
+    assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    assert app.test_client().post(
+        "/api/wallet/topups", json={"surface": "external_web"}
+    ).status_code == 401
+
+
+def test_external_topup_cannot_be_activated_by_client_surface_alone(app, client_and_admin):
+    owner, admin = client_and_admin
+    publish_policy(app)
+    original = dict(owner.environ_base)
+    try:
+        owner.environ_base["wsgi.url_scheme"] = "http"
+        assert topup(owner).status_code == 403
+        owner.environ_base["wsgi.url_scheme"] = "https"
+        owner.environ_base["HTTP_HOST"] = "other.example.test"
+        assert topup(owner).status_code == 403
+        owner.environ_base["HTTP_HOST"] = "wallet.example.test"
+        owner.environ_base.pop("HTTP_ORIGIN")
+        assert topup(owner).status_code == 403
+        owner.environ_base["HTTP_ORIGIN"] = "https://wallet.example.test"
+        owner.environ_base["HTTP_SEC_FETCH_SITE"] = "cross-site"
+        assert topup(owner).status_code == 403
+        owner.environ_base["HTTP_SEC_FETCH_SITE"] = "same-origin"
+        owner.environ_base["HTTP_SEC_FETCH_MODE"] = "navigate"
+        assert topup(owner).status_code == 403
+    finally:
+        owner.environ_base.clear()
+        owner.environ_base.update(original)
+    assert wallet(owner)["balance"] == 0
+    with connect(app.config["DATABASE"]) as db:
+        assert db.execute("SELECT count(*) FROM objects WHERE kind='order'").fetchone()[0] == 0
+
+
+def test_external_topup_requires_published_terms_snapshot(app, client_and_admin):
+    owner, admin = client_and_admin
+    published = publish_policy(app)
+    missing = owner.post(
+        "/api/wallet/topups",
+        json={"package_id": "p150", "key": "missing-terms", "surface": "external_web"},
+    )
+    assert missing.status_code == 422, missing.json
+    wrong = owner.post(
+        "/api/wallet/topups",
+        json={
+            "package_id": "p150",
+            "key": "old-terms",
+            "surface": "external_web",
+            "policy_id": "wrong-policy",
+            "terms_accepted": True,
+        },
+    )
+    assert wrong.status_code == 422, wrong.json
+    approved = topup(owner)
+    assert approved.status_code == 201, approved.json
+    assert approved.json["data"]["policy_id"] == published["id"]
+    assert approved.json["data"]["terms_accepted_at"] == app.clock[0]
 
 
 def test_wallet_is_private_and_empty_by_default(app):
