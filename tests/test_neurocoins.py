@@ -482,6 +482,28 @@ def test_verified_lava_receipt_auto_purchases_only_once(app, client_and_admin):
     ]
 
 
+def test_cancelled_topup_cannot_auto_purchase_even_if_provider_paid(
+    app, client_and_admin
+):
+    client, admin = client_and_admin
+    publish_policy(app)
+    booking = booking_confirmed(app, client, admin)
+    order = topup(client, booking_id=booking["id"])
+    assert order.status_code == 201
+    from marina import object_get
+    from marina.db import update
+
+    person = owner_id(client)
+    with transaction(app.config["DATABASE"]) as db:
+        previous = object_get(db, order.json["id"], "order", person)
+        update(db, previous, app.clock[0], status="cancelled")
+    result = confirmed_receipt(app, order.json["id"])
+    assert result["status"] == "paid"
+    assert wallet(client)["balance"] == 150
+    active = client.get("/api/bookings/" + booking["id"]).json
+    assert active["data"].get("paid_at") is None
+
+
 def test_cancelled_booking_preserves_lava_funds_without_auto_purchase(app, client_and_admin):
     client, admin = client_and_admin
     publish_policy(app)
