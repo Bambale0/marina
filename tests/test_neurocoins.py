@@ -142,9 +142,10 @@ def test_external_wallet_page_is_visible_but_checkout_disabled_by_default(app):
     assert response.status_code == 200
     assert b"wallet.js" in response.data
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
-    assert app.test_client().post(
-        "/api/wallet/topups", json={"surface": "external_web"}
-    ).status_code == 401
+    assert (
+        app.test_client().post("/api/wallet/topups", json={"surface": "external_web"}).status_code
+        == 401
+    )
 
 
 def test_external_topup_cannot_be_activated_by_client_surface_alone(app, client_and_admin):
@@ -162,15 +163,27 @@ def test_external_topup_cannot_be_activated_by_client_surface_alone(app, client_
         {"base_url": "http://wallet.example.test", "headers": original["headers"]},
         {"base_url": "https://other.example.test", "headers": original["headers"]},
         {"base_url": original["base_url"], "headers": {}},
-        {"base_url": original["base_url"], "headers": {
-            **original["headers"], "Origin": "https://evil.example.test",
-        }},
-        {"base_url": original["base_url"], "headers": {
-            **original["headers"], "Sec-Fetch-Site": "cross-site",
-        }},
-        {"base_url": original["base_url"], "headers": {
-            **original["headers"], "Sec-Fetch-Mode": "navigate",
-        }},
+        {
+            "base_url": original["base_url"],
+            "headers": {
+                **original["headers"],
+                "Origin": "https://evil.example.test",
+            },
+        },
+        {
+            "base_url": original["base_url"],
+            "headers": {
+                **original["headers"],
+                "Sec-Fetch-Site": "cross-site",
+            },
+        },
+        {
+            "base_url": original["base_url"],
+            "headers": {
+                **original["headers"],
+                "Sec-Fetch-Mode": "navigate",
+            },
+        },
     ]
     for arguments in denied:
         result = owner.post("/api/wallet/topups", json=payload, **arguments)
