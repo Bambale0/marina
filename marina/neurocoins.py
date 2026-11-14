@@ -305,7 +305,8 @@ def register_neurocoins(app):
             "currency": "NEURO",
             "balance": balance(g.db, g.actor["id"]),
             "enabled": bool(policy),
-            "spend_enabled": bool(policy) and app.config.get("NEUROCOINS_BOT_SPEND_ENABLED") is True,
+            "spend_enabled": bool(policy)
+            and app.config.get("NEUROCOINS_BOT_SPEND_ENABLED") is True,
             "packages": policy["data"]["packages"] if policy else [],
             "services": policy["data"]["services"] if policy else [],
             "history": [dict(x) for x in history],
@@ -318,7 +319,8 @@ def register_neurocoins(app):
         order = object_get(g.db, id, "order", g.actor["id"])
         require(
             order["data"].get("product_snapshot", {}).get("service") == "neurocoins",
-            "Пополнение не найдено", 404,
+            "Пополнение не найдено",
+            404,
         )
         row = g.db.execute(
             "SELECT * FROM objects WHERE kind='payment_attempt' AND owner=? "
@@ -332,9 +334,7 @@ def register_neurocoins(app):
 
         link = (
             attempt["data"].get("url")
-            if attempt
-            and attempt["status"] == "ready"
-            and checkout_open(g.db, order, g.now)
+            if attempt and attempt["status"] == "ready" and checkout_open(g.db, order, g.now)
             else None
         )
         return {
@@ -478,7 +478,8 @@ def register_neurocoins(app):
     def pay_booking(id):
         require(
             app.config.get("NEUROCOINS_BOT_SPEND_ENABLED") is True,
-            "Оплата Нейро-коинами внутри Telegram пока не разрешена", 403,
+            "Оплата Нейро-коинами внутри Telegram пока не разрешена",
+            403,
         )
         d = body()
         key = d.get("key")
