@@ -607,6 +607,7 @@ def test_disabling_lava_suppresses_queued_invoice_without_provider_call(app, cli
     attempt = client.post(
         "/api/orders/" + order.json["id"] + "/checkout",
         json={"email": "buyer@example.test"},
+        **WEB_REQUEST,
     )
     assert attempt.status_code == 202, attempt.json
     app.config["NEUROCOINS_LAVA_ENABLED"] = False
@@ -637,6 +638,7 @@ def test_verified_provider_lookup_creates_ledger_credit(app, client_and_admin):
     attempt = client.post(
         "/api/orders/" + order.json["id"] + "/checkout",
         json={"email": "buyer@example.test"},
+        **WEB_REQUEST,
     )
     assert attempt.status_code == 202
     calls = []
