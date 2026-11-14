@@ -1,6 +1,7 @@
 """Neurocoin wallet: no client funds are credited before a verified Lava receipt."""
 
 import concurrent.futures
+import sqlite3
 
 import pytest
 
@@ -188,6 +189,16 @@ def test_policy_rejects_stars_and_invalid_amounts(app):
             {
                 **valid,
                 "packages": [
+                    {"id": "p150", "title": "Stars plus Lava", "coins": 150,
+                     "lava_offer_id": "fixture", "stars": 150}
+                ],
+            }
+        )
+    with pytest.raises(Problem):
+        validate_policy(
+            {
+                **valid,
+                "packages": [
                     {"id": "p150", "title": "Пакет", "coins": True, "lava_offer_id": "fixture"}
                 ],
             }
@@ -249,6 +260,23 @@ def test_bot_spend_gate_stays_closed_when_policy_is_published(app, client_and_ad
     )
     assert response.status_code == 403
     assert wallet(client)["balance"] == 0
+
+
+def test_ledger_rows_are_immutable_at_database_level(app, client_and_admin):
+    client, admin = client_and_admin
+    person = owner_id(client)
+    adjustment = admin.post(
+        "/api/admin/wallet/" + person + "/adjust",
+        json={"delta": 40, "key": "immutable-row", "reason": "Проверка неизменности"},
+    )
+    assert adjustment.status_code == 200, adjustment.json
+    entry_id = adjustment.json["entry"]["id"]
+    with connect(app.config["DATABASE"]) as db:
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("UPDATE neurocoin_ledger SET delta=100 WHERE id=?", (entry_id,))
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("DELETE FROM neurocoin_ledger WHERE id=?", (entry_id,))
+    assert wallet(client)["balance"] == 40
 
 
 def test_admin_adjustment_requires_real_admin_and_is_idempotent(app, client_and_admin):
