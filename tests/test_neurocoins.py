@@ -186,6 +186,25 @@ def test_confirmed_booking_debit_then_cancel_refunds_once(app, client_and_admin)
     assert wallet(client)["balance"] == 30
     cancel = client.post("/api/bookings/" + booking["id"] + "/cancel", json={})
     assert cancel.status_code == 200, cancel.json
+    # Refunds require a separate audited decision by the specialist.
+    assert wallet(client)["balance"] == 30
+    with connect(app.config["DATABASE"]) as db:
+        rec = db.execute(
+            "SELECT status FROM objects WHERE kind='reconciliation' "
+            "AND json_extract(data,'$.booking_id')=?", (booking["id"],)
+        ).fetchone()
+        assert rec is not None and rec["status"] == "open"
+    refund = admin.post(
+        "/api/admin/wallet/bookings/" + booking["id"] + "/refund",
+        json={"reason": "Согласован возврат за отменённое занятие"},
+    )
+    assert refund.status_code == 200, refund.json
+    assert wallet(client)["balance"] == 150
+    again = admin.post(
+        "/api/admin/wallet/bookings/" + booking["id"] + "/refund",
+        json={"reason": "Повторное подтверждение возврата"},
+    )
+    assert again.status_code == 200
     assert wallet(client)["balance"] == 150
     with connect(app.config["DATABASE"]) as db:
         source_counts = db.execute(
@@ -303,6 +322,10 @@ def test_cancelled_booking_preserves_lava_funds_without_auto_purchase(
     with connect(app.config["DATABASE"]) as db:
         assert db.execute(
             "SELECT count(*) FROM neurocoin_ledger WHERE source='booking'"
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT count(*) FROM objects WHERE kind='reconciliation' "
+            "AND json_extract(data,'$.issue')='neurocoins_booking_cancelled'"
         ).fetchone()[0] == 0
 
 
