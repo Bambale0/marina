@@ -18,30 +18,36 @@ MAX_ENTRY = 1_000_000_000
 PACK_ID = re.compile(r"[a-z][a-z0-9_-]{1,47}\Z")
 
 
+def configured_web_origin(app):
+    """Validate the operator's web origin without requiring HTTP request context."""
+    origin = (app.config.get("NEUROCOINS_WEB_ORIGIN") or "").rstrip("/")
+    parsed = urlsplit(origin)
+    if not (
+        parsed.scheme == "https"
+        and parsed.netloc
+        and parsed.path == ""
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return None
+    return origin
+
+
 def external_origin(app, *, require_post=False):
     """Extra browser boundary: never treat user-provided 'surface' as proof.
 
     This check cannot establish whether a service is eligible for a
     third-party payment provider under Telegram policy.
     """
-    origin = app.config.get("NEUROCOINS_WEB_ORIGIN") or ""
-    parsed = urlsplit(origin)
-    if not (
-        parsed.scheme == "https"
-        and parsed.netloc
-        and parsed.path in ("", "/")
-        and not parsed.username
-        and not parsed.password
-        and not parsed.query
-        and not parsed.fragment
-        and request.host == parsed.netloc
-        and request.is_secure
-    ):
+    origin = configured_web_origin(app)
+    if not origin or not request.is_secure or request.host != urlsplit(origin).netloc:
         return False
     if not require_post:
         return True
     return (
-        request.headers.get("Origin") == origin.rstrip("/")
+        request.headers.get("Origin") == origin
         and request.headers.get("Sec-Fetch-Site") == "same-origin"
         and request.headers.get("Sec-Fetch-Mode") == "cors"
     )
