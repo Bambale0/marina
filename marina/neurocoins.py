@@ -353,10 +353,13 @@ def register_neurocoins(app):
         return {
             "currency": "NEURO",
             "policy_id": policy["id"] if policy else None,
+            "terms": policy["data"]["terms"] if policy else None,
             "balance": balance(g.db, g.actor["id"]),
             "enabled": bool(policy),
             "web_topup_enabled": bool(policy)
             and app.config.get("NEUROCOINS_LAVA_ENABLED") is True
+            and provider_enabled(app, "lava")
+            and bool(policy["data"]["packages"])
             and external_origin(app),
             "spend_enabled": bool(policy)
             and app.config.get("NEUROCOINS_BOT_SPEND_ENABLED") is True,
