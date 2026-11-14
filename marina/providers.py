@@ -157,9 +157,13 @@ def register_providers(app):
             require(
                 app.config.get("NEUROCOINS_LAVA_ENABLED") is True
                 and o["data"].get("surface") == "external_web",
-                "Нейро-коины через Lava.top не продаются внутри Telegram", 403,
+                "Нейро-коины через Lava.top не продаются внутри Telegram",
+                403,
             )
-        if g.actor["role"] == "admin" and o["data"].get("product_snapshot", {}).get("service") != "neurocoins":
+        if (
+            g.actor["role"] == "admin"
+            and o["data"].get("product_snapshot", {}).get("service") != "neurocoins"
+        ):
             from .commerce import admin_fulfill
 
             return admin_fulfill(g.db, o, g.actor["id"], g.now)
