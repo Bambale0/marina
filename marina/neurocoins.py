@@ -280,9 +280,21 @@ def register_neurocoins(app):
         key = d.get("key")
         require(isinstance(key, str) and 4 <= len(key) <= 120, "Нужен уникальный ключ")
         booking_id = d.get("booking_id")
+        previous = g.db.execute(
+            "SELECT object_id FROM dedup WHERE scope=? AND key=?",
+            ("neurocoins-topup:" + g.actor["id"], key),
+        ).fetchone()
+        if previous:
+            existing = object_get(g.db, previous["object_id"], "order", g.actor["id"])
+            require(
+                existing["data"].get("coin_pack", {}).get("id") == d.get("package_id")
+                and existing["data"].get("auto_booking_id") == booking_id,
+                "Ключ уже использован для другого пополнения", 409,
+            )
+            return existing, 201
         auto_price = None
         if booking_id is not None:
-            booking = payable_booking(g.db, g.actor["id"], booking_id)
+            payable_booking(g.db, g.actor["id"], booking_id)
             service = next(
                 (x for x in p["data"]["services"] if x["id"] == "online_lesson"), None,
             )
