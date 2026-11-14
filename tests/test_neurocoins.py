@@ -550,6 +550,7 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
     attempt = client.post(
         "/api/orders/" + order_id + "/checkout",
         json={"email": "buyer@example.test"},
+        **WEB_REQUEST,
     )
     assert attempt.status_code == 202, attempt.json
     requests = []
@@ -594,6 +595,7 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
     replay = client.post(
         "/api/orders/" + order_id + "/checkout",
         json={"email": "buyer@example.test"},
+        **WEB_REQUEST,
     )
     assert replay.status_code == 200
     assert replay.json["id"] == attempt.json["id"]
