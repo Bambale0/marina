@@ -215,20 +215,34 @@ def refund_topup(db, order, charge, now):
 
 
 def refund_booking(db, booking, now, actor, why):
+    """Cancellation does not mint coins until a specialist approves a refund."""
     if booking["data"].get("payment_source") != "neurocoins":
-        return
+        return None
+    existing = db.execute(
+        "SELECT * FROM objects WHERE kind='reconciliation' "
+        "AND json_extract(data,'$.issue')='neurocoins_booking_cancelled' "
+        "AND json_extract(data,'$.booking_id')=?",
+        (booking["id"],),
+    ).fetchone()
+    if existing:
+        return existing["id"]
     coins = booking["data"].get("neurocoins_paid")
     require(type(coins) is int and coins > 0, "Некорректная запись оплаты", 409)
-    entry(
+    issue = insert(
         db,
-        booking["owner"],
-        coins,
-        "booking_refund",
-        booking["id"],
-        now,
-        actor,
-        why,
+        "reconciliation",
+        {
+            "issue": "neurocoins_booking_cancelled",
+            "booking_id": booking["id"],
+            "coins": coins,
+            "reason": why,
+        },
+        now, booking["owner"], status="open",
     )
+    audit(db, actor, "neurocoins.refund_review", issue, now, why)
+    emit(db, booking["owner"], issue["id"], "reconciliation.created", now)
+    return issue["id"]
+
 
 
 def register_neurocoins(app):
@@ -370,6 +384,50 @@ def register_neurocoins(app):
         booking = payable_booking(g.db, g.actor["id"], id)
         paid = spend_booking(g.db, booking, service["coins"], p["id"], g.now, g.actor["id"])
         return {"booking_id": paid["id"], "balance": balance(g.db, g.actor["id"])}
+
+    @app.post("/api/admin/wallet/bookings/<id>/refund")
+    @protected(admin=True)
+    def approve_booking_refund(id):
+        d = body()
+        why = reason(d)
+        require(
+            g.actor["telegram_id"] in app.config["ADMIN_TELEGRAM_IDS"],
+            "Права специалиста отозваны", 403,
+        )
+        booking = object_get(g.db, id, "booking")
+        require(
+            booking["status"] == "cancelled"
+            and booking["data"].get("payment_source") == "neurocoins",
+            "Только отменённая запись, оплаченная Нейро-коинами", 409,
+        )
+        amount = booking["data"].get("neurocoins_paid")
+        require(type(amount) is int and amount > 0, "Некорректная сумма возврата", 409)
+        issue_row = g.db.execute(
+            "SELECT * FROM objects WHERE kind='reconciliation' "
+            "AND json_extract(data,'$.issue')='neurocoins_booking_cancelled' "
+            "AND json_extract(data,'$.booking_id')=?",
+            (id,),
+        ).fetchone()
+        require(issue_row, "Задача сверки возврата не создана", 409)
+        from .db import unpack
+
+        issue = unpack(issue_row)
+        movement = entry(
+            g.db, booking["owner"], amount, "booking_refund", id,
+            g.now, g.actor["id"], why,
+        )
+        if issue["status"] != "resolved":
+            resolved = update(
+                g.db, issue, g.now,
+                {**issue["data"], "resolution": why,
+                 "resolved_by": g.actor["id"], "ledger_id": movement["id"]},
+                "resolved",
+            )
+            audit(
+                g.db, g.actor["id"], "neurocoins.refund_approved",
+                resolved, g.now, why, issue["revision"],
+            )
+        return {"entry": movement, "balance": balance(g.db, booking["owner"])}
 
     @app.post("/api/admin/wallet/<owner>/adjust")
     @protected(admin=True)
