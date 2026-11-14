@@ -214,7 +214,13 @@ def fulfill_topup(db, order, paid_at, now):
         status="recorded",
     )
     auto_id = d.get("auto_booking_id")
-    if auto_id:
+    if auto_id and order["status"] != "pending":
+        audit(
+            db, "provider:lava", "neurocoins.auto_purchase_skipped",
+            credit, now,
+            "Пополнение подтверждено, но исходный счёт уже не активен",
+        )
+    elif auto_id:
         # Successful top-up is independent of the booking. A cancelled or
         # already paid booking simply leaves the coins on the user's balance.
         from . import Problem
