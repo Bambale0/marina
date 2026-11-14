@@ -457,9 +457,7 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
     assert replay.json["id"] == attempt.json["id"]
 
 
-def test_disabling_lava_suppresses_queued_invoice_without_provider_call(
-    app, client_and_admin
-):
+def test_disabling_lava_suppresses_queued_invoice_without_provider_call(app, client_and_admin):
     client, admin = client_and_admin
     publish_policy(app)
     order = topup(client)
