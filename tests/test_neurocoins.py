@@ -129,6 +129,43 @@ def test_wallet_is_private_and_empty_by_default(app):
         assert db.execute("SELECT count(*) FROM neurocoin_ledger").fetchone()[0] == 0
 
 
+def test_wallet_ledger_is_in_owners_data_export_only(app, client_and_admin):
+    owner, admin = client_and_admin
+    another = login(app, 3)
+    owner_account = owner_id(owner)
+    response = admin.post(
+        "/api/admin/wallet/" + owner_account + "/adjust",
+        json={"delta": 25, "key": "export-proof", "reason": "Тест выгрузки"},
+    )
+    assert response.status_code == 200, response.json
+    exported = owner.get("/api/data-export")
+    assert exported.status_code == 200, exported.json
+    assert len(exported.json["neurocoin_ledger"]) == 1
+    assert exported.json["neurocoin_ledger"][0]["delta"] == 25
+    isolated = another.get("/api/data-export")
+    assert isolated.status_code == 200
+    assert isolated.json["neurocoin_ledger"] == []
+
+
+def test_bot_spending_is_closed_by_default_even_after_admin_credit(app):
+    client, admin = login(app, 2), login(app)
+    publish_policy(app)
+    booking = booking_confirmed(app, client, admin)
+    person = owner_id(client)
+    result = admin.post(
+        "/api/admin/wallet/" + person + "/adjust",
+        json={"delta": 200, "key": "blocked-spend", "reason": "Тест ограничений"},
+    )
+    assert result.status_code == 200
+    assert wallet(client)["balance"] == 200
+    assert wallet(client)["spend_enabled"] is False
+    blocked = client.post(
+        "/api/wallet/bookings/" + booking["id"] + "/pay", json={"key": "closed-gate"}
+    )
+    assert blocked.status_code == 403
+    assert wallet(client)["balance"] == 200
+
+
 def test_policy_rejects_stars_and_invalid_amounts(app):
     valid = {
         "type": "neurocoins",
