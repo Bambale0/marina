@@ -330,6 +330,14 @@ def register_privacy(app):
                     (g.actor["id"],),
                 )
             ],
+            "neurocoin_ledger": [
+                dict(row)
+                for row in g.db.execute(
+                    "SELECT id,delta,source,reference,created FROM neurocoin_ledger "
+                    "WHERE owner=? ORDER BY created,id",
+                    (g.actor["id"],),
+                )
+            ],
         }
 
     @app.post("/api/admin/subjects/<id>")
