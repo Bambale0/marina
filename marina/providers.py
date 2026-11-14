@@ -91,6 +91,9 @@ def invoice(app, attempt):
     except OverflowError:
         raise Problem("Сумма счёта слишком велика", 422)
     require(Decimal(str(amount)) * 100 == d["total"], "Сумма счёта теряет точность")
+    return_path = d.get("return_path", "/")
+    require(return_path in ("/", "/wallet"), "Неверная страница возврата")
+    return_base = app.config["PUBLIC_URL"].rstrip("/") + return_path
     result = lava(
         app,
         "POST",
@@ -102,9 +105,9 @@ def invoice(app, attempt):
             "amount": amount,
             "periodicity": "ONE_TIME",
             "clientUtm": {"utm_source": attempt["id"]},
-            "successful_return_url": app.config["PUBLIC_URL"] + "/?payment=success",
-            "failure_return_url": app.config["PUBLIC_URL"] + "/?payment=failed",
-            "cancel_return_url": app.config["PUBLIC_URL"] + "/?payment=cancelled",
+            "successful_return_url": return_base + "?payment=success",
+            "failure_return_url": return_base + "?payment=failed",
+            "cancel_return_url": return_base + "?payment=cancelled",
         },
     )
     require(
