@@ -1,10 +1,9 @@
 """Neurocoins: an internal, non-transferable service balance backed by an append-only ledger.
 
-No exchange rate is built into code. Star-pack and lesson prices are controlled by
-an approved/published neurocoins policy. Coin credits follow confirmed receipts only.
+One internal coin is one RUB. Package sizes, service prices and Lava offer IDs
+are published via an approved policy. Only verified provider receipts mint coins.
 """
 
-import json
 import re
 
 from flask import g
@@ -20,6 +19,7 @@ PACK_ID = re.compile(r"[a-z][a-z0-9_-]{1,47}\Z")
 
 def validate_policy(d):
     require(type(d.get("enabled")) is bool, "Укажите статус кошелька")
+    require(d.get("currency") == "RUB", "Один Нейро-коин соответствует одному рублю")
     require(isinstance(d.get("terms"), str) and bool(d["terms"].strip()), "Укажите условия Нейро-коинов")
     require(
         type(d.get("quote_ttl_seconds")) is int
@@ -39,9 +39,9 @@ def validate_policy(d):
             and 1 <= len(pack["title"].strip()) <= 100
             and type(pack.get("coins")) is int
             and 1 <= pack["coins"] <= MAX_ENTRY
-            and type(pack.get("stars")) is int
-            and 1 <= pack["stars"] <= MAX_ENTRY,
-            "Проверьте ID, монеты и цену пакета в Stars",
+            and isinstance(pack.get("lava_offer_id"), str)
+            and 1 <= len(pack["lava_offer_id"]) <= 200,
+            "Проверьте название, номинал и Lava offer ID пакета",
         )
         seen.add(pack["id"])
     seen.clear()
@@ -112,62 +112,105 @@ def entry(db, owner, delta, source, reference, now, actor, why, *, allow_negativ
     return result
 
 
-def fulfill_topup(db, order, paid_at, now):
-    """Called only by the existing fulfill() transaction after verified Stars receipt."""
-    d = order["data"]
+def payable_booking(db, owner, booking_id):
+    booking = object_get(db, booking_id, "booking", owner)
     require(
-        d.get("provider") == "stars"
-        and d.get("currency") == "XTR"
-        and isinstance(d.get("coin_pack"), dict)
-        and type(d["coin_pack"].get("coins")) is int
-        and d["coin_pack"]["coins"] > 0,
-        "Некорректный оплаченный пакет",
+        booking["status"] == "confirmed"
+        and booking["data"].get("booking_kind") == "online_lesson"
+        and booking["data"].get("paid_at") is None
+        and not db.execute(
+            "SELECT 1 FROM objects WHERE kind='order' "
+            "AND json_extract(data,'$.booking_id')=? "
+            "AND status IN ('pending','paid','paid_review')",
+            (booking_id,),
+        ).fetchone(),
+        "Занятие уже оплачено, отменено или имеет незакрытый счёт",
+        409,
+    )
+    return booking
+
+
+def spend_booking(db, booking, price, policy_id, now, actor):
+    """Atomic debit + paid booking; one debit per booking, regardless of callers."""
+    require(type(price) is int and 0 < price <= MAX_ENTRY, "Некорректный тариф")
+    booking = payable_booking(db, booking["owner"], booking["id"])
+    movement = entry(
+        db, booking["owner"], -price, "booking", booking["id"],
+        now, actor, "Оплата занятия Нейро-коинами",
+    )
+    result = update(
+        db, booking, now,
+        {
+            **booking["data"], "paid_at": now, "payment_source": "neurocoins",
+            "neurocoins_paid": price, "neurocoins_policy_id": policy_id,
+            "neurocoins_entry_id": movement["id"],
+        },
+    )
+    audit(
+        db, actor, "booking.neurocoins_payment", result, now,
+        "Оплачено внутренними монетами", booking["revision"],
+    )
+    emit(db, result["owner"], result["id"], "booking.paid", now)
+    return result
+
+
+def fulfill_topup(db, order, paid_at, now):
+    """The provider receipt was inserted by confirm() in this same transaction."""
+    d = order["data"]
+    pack = d.get("coin_pack")
+    require(
+        d.get("provider") == "lava"
+        and d.get("currency") == "RUB"
+        and isinstance(pack, dict)
+        and type(pack.get("coins")) is int
+        and 0 < pack["coins"] <= MAX_ENTRY
+        and d.get("total") == pack["coins"] * 100,
+        "Параметры пополнения не совпадают со снимком заказа",
     )
     receipt = db.execute(
-        "SELECT charge FROM receipts WHERE order_id=? AND provider='stars' "
-        "AND status='confirmed' AND amount=? AND currency='XTR'",
+        "SELECT charge FROM receipts WHERE order_id=? AND provider='lava' "
+        "AND status='confirmed' AND amount=? AND currency='RUB'",
         (order["id"], d["total"]),
     ).fetchone()
-    require(receipt, "Нейро-коины начисляются только после подтверждения Stars", 409)
+    require(receipt, "Монеты начисляются только после подтверждения Lava.top", 409)
     movement = entry(
-        db,
-        order["owner"],
-        d["coin_pack"]["coins"],
-        "stars_credit",
-        order["id"],
-        now,
-        "provider:stars",
-        "Подтверждённый платёж Stars за пакет Нейро-коинов",
+        db, order["owner"], pack["coins"], "lava_credit", order["id"],
+        now, "provider:lava", "Подтверждённое поступление Lava.top",
     )
-    return insert(
-        db,
-        "neurocoin_credit",
-        {
-            "order_id": order["id"],
-            "ledger_id": movement["id"],
-            "coins": d["coin_pack"]["coins"],
-            "paid_at": paid_at,
-        },
-        now,
-        order["owner"],
-        status="recorded",
+    credit = insert(
+        db, "neurocoin_credit",
+        {"order_id": order["id"], "ledger_id": movement["id"],
+         "coins": pack["coins"], "paid_at": paid_at},
+        now, order["owner"], status="recorded",
     )
+    auto_id = d.get("auto_booking_id")
+    if auto_id:
+        # Successful top-up is independent of the booking. A cancelled or
+        # already paid booking simply leaves the coins on the user's balance.
+        from . import Problem
+
+        try:
+            booking = payable_booking(db, order["owner"], auto_id)
+            spend_booking(
+                db, booking, d["auto_price_coins"],
+                d["auto_policy_id"], now, "provider:lava",
+            )
+        except Problem as exc:
+            audit(
+                db, "provider:lava", "neurocoins.auto_purchase_skipped",
+                credit, now, "Зачисление сохранено; покупка не состоялась: " + exc.message,
+            )
+    return credit
 
 
 def refund_topup(db, order, charge, now):
+    """Call only after a *verified* Lava refund/chargeback event or reconciliation."""
     if order["data"].get("product_snapshot", {}).get("service") != "neurocoins":
         return
     pack = order["data"]["coin_pack"]
     entry(
-        db,
-        order["owner"],
-        -pack["coins"],
-        "stars_refund",
-        charge,
-        now,
-        "provider:stars",
-        "Подтверждён возврат платежа Stars; неиспользованные монеты списаны",
-        allow_negative=True,
+        db, order["owner"], -pack["coins"], "lava_refund", charge,
+        now, "provider:lava", "Подтверждённый возврат Lava.top", allow_negative=True,
     )
 
 
@@ -211,73 +254,89 @@ def register_neurocoins(app):
     @protected()
     def topup():
         d = body()
-        require(provider_enabled(app, "stars"), "Пополнение через Stars пока не подключено", 503)
+        # Only standalone, independently compliance-reviewed web checkout.
+        # The Telegram bot must never initiate Lava payment for digital goods.
         require(
-            app.config["BOT_TOKEN"] and app.config.get("TELEGRAM_WEBHOOK_SECRET"),
-            "Приём платежей Stars не настроен",
-            503,
+            app.config.get("NEUROCOINS_LAVA_ENABLED") is True
+            and d.get("surface") == "external_web",
+            "Оплата Lava.top недоступна в Telegram",
+            403,
+        )
+        require(provider_enabled(app, "lava"), "Приём платежей Lava.top отключён", 503)
+        require(
+            app.config.get("LAVA_API_KEY")
+            and app.config.get("LAVA_WEBHOOK_SECRET")
+            and app.config.get("PUBLIC_URL", "").startswith("https://"),
+            "Lava.top или HTTPS не настроены", 503,
         )
         p = active_policy(g.db)
-        require(p, "Пополнение Нейро-коинов пока недоступно", 409)
+        require(p, "Пополнение монет пока не опубликовано", 409)
         ops = policies(g.db, "operations")
         require(not ops or not ops["data"].get("pause_sales"), "Продажи приостановлены", 409)
         pack = next(
-            (x for x in p["data"]["packages"] if x["id"] == d.get("package_id")),
-            None,
+            (x for x in p["data"]["packages"] if x["id"] == d.get("package_id")), None,
         )
-        require(pack, "Выберите пакет из опубликованного списка", 404)
-        require(
-            isinstance(d.get("key"), str) and 4 <= len(d["key"]) <= 150,
-            "Укажите уникальный ключ покупки",
-        )
+        require(pack, "Пакет отсутствует в опубликованном тарифе", 404)
+        key = d.get("key")
+        require(isinstance(key, str) and 4 <= len(key) <= 120, "Нужен уникальный ключ")
+        booking_id = d.get("booking_id")
+        auto_price = None
+        if booking_id is not None:
+            booking = payable_booking(g.db, g.actor["id"], booking_id)
+            service = next(
+                (x for x in p["data"]["services"] if x["id"] == "online_lesson"), None,
+            )
+            require(service, "Тариф занятия не опубликован", 409)
+            auto_price = service["coins"]
+            require(
+                not g.db.execute(
+                    "SELECT 1 FROM objects WHERE kind='order' "
+                    "AND json_extract(data,'$.auto_booking_id')=? "
+                    "AND status IN ('pending','paid','paid_review')",
+                    (booking_id,),
+                ).fetchone(),
+                "Для занятия уже открыт счёт на пополнение", 409,
+            )
+            require(balance(g.db, g.actor["id"]) < auto_price, "Баланс уже достаточен")
+            require(
+                balance(g.db, g.actor["id"]) + pack["coins"] >= auto_price,
+                "Выберите пакет, покрывающий недостающую сумму",
+            )
         snapshot = dict(pack)
+        offer = pack["lava_offer_id"]
 
         def create():
             order = insert(
-                g.db,
-                "order",
+                g.db, "order",
                 {
-                    "intent_id": uid(),
-                    "product_id": "neurocoins:" + pack["id"],
+                    "intent_id": uid(), "product_id": "neurocoins:" + pack["id"],
                     "product_snapshot": {
-                        "service": "neurocoins",
-                        "title": pack["title"],
+                        "service": "neurocoins", "title": pack["title"],
                         "terms": p["data"]["terms"],
+                        "lava_offer_id": offer,
                     },
-                    "policy_id": p["id"],
-                    "coin_pack": snapshot,
-                    "lines": [
-                        {
-                            "id": uid(),
-                            "subject_id": g.actor["id"],
-                            "amount": pack["stars"],
-                        }
-                    ],
-                    "total": pack["stars"],
-                    "currency": "XTR",
-                    "provider": "stars",
-                    "surface": "telegram",
+                    "policy_id": p["id"], "coin_pack": snapshot,
+                    "lines": [{"id": uid(), "subject_id": g.actor["id"],
+                               "amount": pack["coins"] * 100}],
+                    "total": pack["coins"] * 100, "currency": "RUB",
+                    "provider": "lava", "surface": "external_web",
+                    "auto_booking_id": booking_id,
+                    "auto_price_coins": auto_price,
+                    "auto_policy_id": p["id"] if booking_id else None,
                     "expires": g.now + p["data"]["quote_ttl_seconds"],
                 },
-                g.now,
-                g.actor["id"],
-                status="pending",
+                g.now, g.actor["id"], status="pending",
             )
             audit(
-                g.db,
-                g.actor["id"],
-                "neurocoins.topup_order",
-                order,
-                g.now,
-                "Запрос пакета Нейро-коинов с оплатой Telegram Stars",
+                g.db, g.actor["id"], "neurocoins.topup_order", order,
+                g.now, "Пополнение Нейро-коинов через Lava.top",
             )
             return order
 
         return idempotent(
-            g.db,
-            "neurocoins-topup:" + g.actor["id"],
-            d["key"],
-            {"package_id": pack["id"], "coins": pack["coins"], "stars": pack["stars"]},
+            g.db, "neurocoins-topup:" + g.actor["id"], key,
+            {"package_id": pack["id"], "coins": pack["coins"],
+             "offer": offer, "booking_id": booking_id, "price": auto_price},
             create,
         ), 201
 
@@ -285,76 +344,20 @@ def register_neurocoins(app):
     @protected()
     def pay_booking(id):
         d = body()
-        require(
-            isinstance(d.get("key"), str) and 4 <= len(d["key"]) <= 150,
-            "Укажите ключ операции",
-        )
+        key = d.get("key")
+        require(isinstance(key, str) and 4 <= len(key) <= 120, "Укажите ключ операции")
+        booking = object_get(g.db, id, "booking", g.actor["id"])
+        if booking["data"].get("payment_source") == "neurocoins":
+            return {"booking_id": id, "balance": balance(g.db, g.actor["id"])}
         p = active_policy(g.db)
         require(p, "Оплата Нейро-коинами пока не включена", 409)
         service = next(
-            (item for item in p["data"]["services"] if item["id"] == "online_lesson"),
-            None,
+            (x for x in p["data"]["services"] if x["id"] == "online_lesson"), None,
         )
-        require(service, "Тариф онлайн-занятия пока не опубликован", 409)
-        booking = object_get(g.db, id, "booking", g.actor["id"])
-        require(
-            booking["status"] == "confirmed"
-            and booking["data"].get("booking_kind") == "online_lesson"
-            and booking["data"].get("paid_at") is None
-            and not g.db.execute(
-                "SELECT 1 FROM objects WHERE kind='order' "
-                "AND json_extract(data,'$.booking_id')=? "
-                "AND status IN ('pending','paid','paid_review')",
-                (id,),
-            ).fetchone(),
-            "Запись не подтверждена, уже оплачена или имеет незакрытый счёт",
-            409,
-        )
-
-        def create():
-            movement = entry(
-                g.db,
-                g.actor["id"],
-                -service["coins"],
-                "booking",
-                booking["id"],
-                g.now,
-                g.actor["id"],
-                "Оплата подтверждённого онлайн-занятия Нейро-коинами",
-            )
-            result = update(
-                g.db,
-                booking,
-                g.now,
-                {
-                    **booking["data"],
-                    "paid_at": g.now,
-                    "payment_source": "neurocoins",
-                    "neurocoins_paid": service["coins"],
-                    "neurocoins_tariff": dict(service),
-                    "neurocoins_policy_id": p["id"],
-                    "neurocoins_entry_id": movement["id"],
-                },
-            )
-            audit(
-                g.db,
-                g.actor["id"],
-                "booking.neurocoins_payment",
-                result,
-                g.now,
-                "Оплачено из внутреннего баланса",
-                booking["revision"],
-            )
-            emit(g.db, result["owner"], result["id"], "booking.paid", g.now)
-            return {"booking_id": id, "balance": balance(g.db, g.actor["id"])}
-
-        return idempotent(
-            g.db,
-            "neurocoins-booking:" + g.actor["id"],
-            d["key"],
-            {"booking_id": id, "price": service["coins"], "policy_id": p["id"]},
-            create,
-        )
+        require(service, "Тариф занятия не опубликован", 409)
+        booking = payable_booking(g.db, g.actor["id"], id)
+        paid = spend_booking(g.db, booking, service["coins"], p["id"], g.now, g.actor["id"])
+        return {"booking_id": paid["id"], "balance": balance(g.db, g.actor["id"])}
 
     @app.post("/api/admin/wallet/<owner>/adjust")
     @protected(admin=True)
