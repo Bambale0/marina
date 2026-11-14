@@ -151,6 +151,7 @@ def create_app(config=None):
         DEV_TRIPWIRE_BYPASS_PAYMENT=os.getenv("DEV_TRIPWIRE_BYPASS_PAYMENT") == "1",
         SALES_ENABLED=False,
         NEUROCOINS_LAVA_ENABLED=os.getenv("NEUROCOINS_LAVA_ENABLED") == "1",
+        NEUROCOINS_BOT_SPEND_ENABLED=os.getenv("NEUROCOINS_BOT_SPEND_ENABLED") == "1",
     )
     if config:
         app.config.update(config)
