@@ -175,7 +175,13 @@ def checkout_open(db, order, now):
     """New invoice eligibility only; received money still goes through confirm."""
     from .scope import service_enabled
 
-    if not service_enabled(db, order["data"].get("product_snapshot", {}).get("service")):
+    service = order["data"].get("product_snapshot", {}).get("service")
+    if service == "neurocoins":
+        from .neurocoins import active_policy
+
+        if not active_policy(db):
+            return False
+    elif not service_enabled(db, service):
         return False
     if order["status"] != "pending" or order["data"]["expires"] <= now:
         return False
@@ -232,6 +238,10 @@ def fulfill(db, order, paid_at, now):
                 course_id=d["product_snapshot"].get("course_id"),
             )
             obj = insert(db, "right", payload, now, order["owner"], line["subject_id"], "active")
+        elif service == "neurocoins":
+            from .neurocoins import fulfill_topup
+
+            obj = fulfill_topup(db, order, paid_at, now)
         elif service == "pdf":
             payload.update(
                 attempt_id=d["attempt_id"],
