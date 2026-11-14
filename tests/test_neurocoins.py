@@ -267,6 +267,30 @@ def test_bot_spend_gate_stays_closed_when_policy_is_published(app, client_and_ad
     assert wallet(client)["balance"] == 0
 
 
+def test_upgrade_existing_database_preserves_accounts_and_creates_wallet_tables(app):
+    client = login(app, 2)
+    person = owner_id(client)
+    with connect(app.config["DATABASE"]) as db:
+        db.execute("DROP TABLE neurocoin_ledger")
+        assert db.execute(
+            "SELECT count(*) FROM accounts WHERE id=?", (person,)
+        ).fetchone()[0] == 1
+    from marina import create_app
+
+    upgraded = create_app({**app.config})
+    with connect(upgraded.config["DATABASE"]) as db:
+        assert db.execute(
+            "SELECT count(*) FROM accounts WHERE id=?", (person,)
+        ).fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM neurocoin_ledger").fetchone()[0] == 0
+        assert db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        triggers = db.execute(
+            "SELECT count(*) FROM sqlite_master "
+            "WHERE type='trigger' AND name LIKE 'neurocoin_ledger_no_%'"
+        ).fetchone()[0]
+        assert triggers == 2
+
+
 def test_ledger_rows_are_immutable_at_database_level(app, client_and_admin):
     client, admin = client_and_admin
     person = owner_id(client)
