@@ -12,7 +12,7 @@ function make(tag, attrs = {}, ...children) {
   for (const [name, value] of Object.entries(attrs)) {
     if (name === "class") node.className = value;
     else if (name === "text") node.textContent = value;
-    else if (name === "type" || name === "placeholder" || name === "href" || name === "target" || name === "rel" || name === "min") node.setAttribute(name, value);
+    else if (name === "type" || name === "placeholder" || name === "href" || name === "target" || name === "rel" || name === "min" || name === "value") node.setAttribute(name, value);
     else if (name === "required") node.required = Boolean(value);
   }
   for (const child of children.flat()) if (child != null) node.append(child instanceof Node ? child : document.createTextNode(String(child)));
