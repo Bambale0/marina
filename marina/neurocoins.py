@@ -216,8 +216,11 @@ def fulfill_topup(db, order, paid_at, now):
     auto_id = d.get("auto_booking_id")
     if auto_id and order["status"] != "pending":
         audit(
-            db, "provider:lava", "neurocoins.auto_purchase_skipped",
-            credit, now,
+            db,
+            "provider:lava",
+            "neurocoins.auto_purchase_skipped",
+            credit,
+            now,
             "Пополнение подтверждено, но исходный счёт уже не активен",
         )
     elif auto_id:
