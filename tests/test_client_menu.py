@@ -131,7 +131,7 @@ def test_web_login_code_is_private_single_use_and_short_lived(app):
     bot = Bot(app, {"id": 2, "first_name": "Parent"}, 2, "private-login")
     bot.message({"text": "/login"})
     text = messages[-1]["text"]
-    matches = re.findall(r"\\b[A-Za-z0-9_-]{40,60}\\b", text)
+    matches = re.findall(r"\b[A-Za-z0-9_-]{40,60}\b", text)
     assert len(matches) == 1
     code = matches[0]
     browser = app.test_client()
@@ -140,7 +140,7 @@ def test_web_login_code_is_private_single_use_and_short_lived(app):
     replay = browser.post("/api/auth/code", json={"code": code})
     assert replay.status_code == 401
     bot.message({"text": "/login"})
-    refreshed = re.findall(r"\\b[A-Za-z0-9_-]{40,60}\\b", messages[-1]["text"])[0]
+    refreshed = re.findall(r"\b[A-Za-z0-9_-]{40,60}\b", messages[-1]["text"])[0]
     assert refreshed != code
     app.clock[0] += 301
     expired = browser.post("/api/auth/code", json={"code": refreshed})
