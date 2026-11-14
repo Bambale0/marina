@@ -142,6 +142,10 @@ async function loadWallet() {
     const accepted = make("input", { type: "checkbox", required: true });
     const submit = make("button", { type: "submit" }, "Получить счёт Lava.top");
     form.append(
+      make("details", {},
+        make("summary", {}, "Прочитать условия использования Нейро-коинов"),
+        make("p", { class: "wallet-terms" }, wallet.terms || "")
+      ),
       make("label", {}, "Пакет", packageSelect),
       make("label", {}, "Действие после пополнения", bookingSelect),
       make("label", {}, "Email для чека", email),
