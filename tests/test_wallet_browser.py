@@ -23,7 +23,7 @@ def test_external_wallet_login_and_default_disabled_checkout(tmp_path):
     app.config["HTTP_TRANSPORT"] = transport
     bot = Bot(app, {"id": 2, "first_name": "Parent"}, 2, "browser-login")
     bot.message({"text": "/login"})
-    code = re.findall(r"\\b[A-Za-z0-9_-]{40,60}\\b", messages[-1]["text"])[0]
+    code = re.findall(r"\b[A-Za-z0-9_-]{40,60}\b", messages[-1]["text"])[0]
     server = make_server("127.0.0.1", 0, app, threaded=True)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
