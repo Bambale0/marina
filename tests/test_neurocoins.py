@@ -227,6 +227,41 @@ def test_lava_topup_is_external_only_and_never_credits_before_receipt(
     assert repeated.json["id"] == order.json["id"]
 
 
+def test_same_key_replays_pending_auto_topup_without_second_order(app, client_and_admin):
+    client, admin = client_and_admin
+    publish_policy(app)
+    booking = booking_confirmed(app, client, admin)
+    first = topup(client, booking_id=booking["id"], key="same-key")
+    assert first.status_code == 201, first.json
+    again = topup(client, booking_id=booking["id"], key="same-key")
+    assert again.status_code == 201, again.json
+    assert again.json["id"] == first.json["id"]
+    other_key = topup(client, booking_id=booking["id"], key="other-key")
+    assert other_key.status_code == 409
+    with connect(app.config["DATABASE"]) as db:
+        assert db.execute(
+            "SELECT count(*) FROM objects WHERE kind='order'"
+        ).fetchone()[0] == 1
+
+
+def test_existing_balance_combines_with_topup_and_auto_purchase(app, client_and_admin):
+    client, admin = client_and_admin
+    publish_policy(app, coins=150, price=210)
+    booking = booking_confirmed(app, client, admin)
+    person = owner_id(client)
+    seed = admin.post(
+        "/api/admin/wallet/" + person + "/adjust",
+        json={"delta": 100, "key": "init-balance", "reason": "Тестовый остаток"},
+    )
+    assert seed.status_code == 200
+    order = topup(client, booking_id=booking["id"], key="topup-combine")
+    assert order.status_code == 201, order.json
+    confirmed_receipt(app, order.json["id"])
+    assert wallet(client)["balance"] == 40
+    booked = client.get("/api/bookings/" + booking["id"]).json
+    assert booked["data"]["neurocoins_paid"] == 210
+
+
 def test_verified_lava_receipt_auto_purchases_only_once(app, client_and_admin):
     client, admin = client_and_admin
     publish_policy(app)
