@@ -106,6 +106,9 @@ def confirm_refund(db, payload, now):
             status="confirmed",
         )
     if receipt["status"] == "confirmed":
+        from .neurocoins import refund_topup
+
+        refund_topup(db, order, payload["charge"], now)
         for row in db.execute(
             "SELECT object_id FROM fulfillments WHERE order_id=?", (order["id"],)
         ).fetchall():
