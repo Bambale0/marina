@@ -15,7 +15,7 @@ from .db import audit, emit, insert, uid, update
 from .screening import idempotent
 
 MAX_ENTRY = 1_000_000_000
-PACK_ID = re.compile(r"[a-z][a-z0-9_-]{1,47}\\Z")
+PACK_ID = re.compile(r"[a-z][a-z0-9_-]{1,47}\Z")
 
 
 def external_origin(app, *, require_post=False):
