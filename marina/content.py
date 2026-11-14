@@ -462,11 +462,15 @@ def validate(obj):
     if obj["kind"] == "policy":
         require(
             d.get("type")
-            in ("commerce", "operations", "privacy", "training", "ai", "consultation_routes"),
+            in ("commerce", "operations", "privacy", "training", "ai", "consultation_routes", "neurocoins"),
             "Укажите тип правил",
         )
         guide_commerce = d.get("type") == "commerce" and d.get("scope") in ("guide", "consultation")
         require(d.get("terms") or guide_commerce, "Укажите условия и основание решения")
+        if d["type"] == "neurocoins":
+            from .neurocoins import validate_policy
+
+            validate_policy(d)
         if d["type"] == "consultation_routes":
             from .consultation_journey import validate_routes
 
