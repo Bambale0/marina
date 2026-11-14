@@ -25,12 +25,23 @@ def client_and_admin(app):
     app.config.update(
         NEUROCOINS_LAVA_ENABLED=True,
         NEUROCOINS_BOT_SPEND_ENABLED=True,
+        NEUROCOINS_WEB_ORIGIN="https://wallet.example.test",
         LAVA_API_KEY="fixture-key",
         LAVA_WEBHOOK_SECRET="fixture-secret",
         PUBLIC_URL="https://fixture.example",
         ENABLED_PAYMENT_PROVIDERS=["lava"],
     )
     return login(app, 2), login(app, 1)
+
+
+WEB_REQUEST = {
+    "base_url": "https://wallet.example.test",
+    "headers": {
+        "Origin": "https://wallet.example.test",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+    },
+}
 
 
 def publish_policy(app, *, enabled=True, coins=150, price=120):
@@ -93,7 +104,15 @@ def booking_confirmed(app, client, admin):
 def topup(client, *, booking_id=None, key="fixture-topup", surface="external_web"):
     return client.post(
         "/api/wallet/topups",
-        json={"package_id": "p150", "key": key, "booking_id": booking_id, "surface": surface},
+        json={
+            "package_id": "p150",
+            "key": key,
+            "booking_id": booking_id,
+            "surface": surface,
+            "policy_id": wallet(client)["policy_id"],
+            "terms_accepted": True,
+        },
+        **WEB_REQUEST,
     )
 
 
@@ -116,6 +135,92 @@ def wallet(client):
     response = client.get("/api/wallet")
     assert response.status_code == 200, response.json
     return response.json
+
+
+def test_external_wallet_page_is_visible_but_checkout_disabled_by_default(app):
+    response = app.test_client().get("/wallet")
+    assert response.status_code == 200
+    assert b"wallet.js" in response.data
+    assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    static_response = app.test_client().get("/static/wallet.html")
+    assert static_response.status_code == 200
+    assert "frame-ancestors 'none'" in static_response.headers["Content-Security-Policy"]
+    assert (
+        app.test_client().post("/api/wallet/topups", json={"surface": "external_web"}).status_code
+        == 401
+    )
+
+
+def test_external_topup_cannot_be_activated_by_client_surface_alone(app, client_and_admin):
+    owner, admin = client_and_admin
+    publish_policy(app)
+    original = WEB_REQUEST
+    payload = {
+        "package_id": "p150",
+        "key": "origin-attack",
+        "surface": "external_web",
+        "policy_id": wallet(owner)["policy_id"],
+        "terms_accepted": True,
+    }
+    denied = [
+        {"base_url": "http://wallet.example.test", "headers": original["headers"]},
+        {"base_url": "https://other.example.test", "headers": original["headers"]},
+        {"base_url": original["base_url"], "headers": {}},
+        {
+            "base_url": original["base_url"],
+            "headers": {
+                **original["headers"],
+                "Origin": "https://evil.example.test",
+            },
+        },
+        {
+            "base_url": original["base_url"],
+            "headers": {
+                **original["headers"],
+                "Sec-Fetch-Site": "cross-site",
+            },
+        },
+        {
+            "base_url": original["base_url"],
+            "headers": {
+                **original["headers"],
+                "Sec-Fetch-Mode": "navigate",
+            },
+        },
+    ]
+    for arguments in denied:
+        result = owner.post("/api/wallet/topups", json=payload, **arguments)
+        assert result.status_code == 403, result.json
+    assert wallet(owner)["balance"] == 0
+    with connect(app.config["DATABASE"]) as db:
+        assert db.execute("SELECT count(*) FROM objects WHERE kind='order'").fetchone()[0] == 0
+
+
+def test_external_topup_requires_published_terms_snapshot(app, client_and_admin):
+    owner, admin = client_and_admin
+    published = publish_policy(app)
+    missing = owner.post(
+        "/api/wallet/topups",
+        json={"package_id": "p150", "key": "missing-terms", "surface": "external_web"},
+        **WEB_REQUEST,
+    )
+    assert missing.status_code == 422, missing.json
+    wrong = owner.post(
+        "/api/wallet/topups",
+        json={
+            "package_id": "p150",
+            "key": "old-terms",
+            "surface": "external_web",
+            "policy_id": "wrong-policy",
+            "terms_accepted": True,
+        },
+        **WEB_REQUEST,
+    )
+    assert wrong.status_code == 422, wrong.json
+    approved = topup(owner)
+    assert approved.status_code == 201, approved.json
+    assert approved.json["data"]["policy_id"] == published["id"]
+    assert approved.json["data"]["terms_accepted_at"] == app.clock[0]
 
 
 def test_wallet_is_private_and_empty_by_default(app):
@@ -461,6 +566,7 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
     attempt = client.post(
         "/api/orders/" + order_id + "/checkout",
         json={"email": "buyer@example.test"},
+        **WEB_REQUEST,
     )
     assert attempt.status_code == 202, attempt.json
     requests = []
@@ -471,6 +577,15 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
             assert data["currency"] == "RUB"
             assert data["amount"] == 150
             assert data["offerId"] == "offer-fixture"
+            assert data["successful_return_url"] == (
+                "https://wallet.example.test/wallet?payment=success"
+            )
+            assert data["failure_return_url"] == (
+                "https://wallet.example.test/wallet?payment=failed"
+            )
+            assert data["cancel_return_url"] == (
+                "https://wallet.example.test/wallet?payment=cancelled"
+            )
             return {"id": "lava-sandbox", "paymentUrl": "https://checkout.example.test/pay"}
         return {"ok": True, "result": {"message_id": len(requests)}}
 
@@ -484,7 +599,10 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
             break
         assert work_once(app) == 1
     assert attempt_status == "ready"
-    view = client.get("/api/wallet/topups/" + order_id)
+    leaked = client.get("/api/wallet/topups/" + order_id)
+    assert leaked.status_code == 200
+    assert leaked.json["payment_url"] is None
+    view = client.get("/api/wallet/topups/" + order_id, base_url="https://wallet.example.test")
     assert view.status_code == 200
     assert view.json["payment_url"] == "https://checkout.example.test/pay"
     app.config["NEUROCOINS_LAVA_ENABLED"] = False
@@ -505,6 +623,7 @@ def test_external_invoice_is_visible_only_to_owner_not_sent_into_telegram(app, c
     replay = client.post(
         "/api/orders/" + order_id + "/checkout",
         json={"email": "buyer@example.test"},
+        **WEB_REQUEST,
     )
     assert replay.status_code == 200
     assert replay.json["id"] == attempt.json["id"]
@@ -518,6 +637,7 @@ def test_disabling_lava_suppresses_queued_invoice_without_provider_call(app, cli
     attempt = client.post(
         "/api/orders/" + order.json["id"] + "/checkout",
         json={"email": "buyer@example.test"},
+        **WEB_REQUEST,
     )
     assert attempt.status_code == 202, attempt.json
     app.config["NEUROCOINS_LAVA_ENABLED"] = False
@@ -548,6 +668,7 @@ def test_verified_provider_lookup_creates_ledger_credit(app, client_and_admin):
     attempt = client.post(
         "/api/orders/" + order.json["id"] + "/checkout",
         json={"email": "buyer@example.test"},
+        **WEB_REQUEST,
     )
     assert attempt.status_code == 202
     calls = []

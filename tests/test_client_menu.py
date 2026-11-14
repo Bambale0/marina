@@ -1,9 +1,11 @@
 """Customer-facing Telegram service menu regression checks."""
 
 import json
+import re
 
 import pytest
 
+from marina import Problem
 from marina.bot import MENU, Bot
 from marina.db import connect, insert, transaction
 from tests.test_identity import app as identity_app
@@ -122,3 +124,43 @@ def test_previous_features_remain_reachable_via_services_command(app):
     assert "Пройти скрининг" in names
     assert "Задание с видео" in names
     assert "Мои обращения" in names
+
+
+def test_web_login_code_is_private_single_use_and_short_lived(app):
+    messages = capture(app)
+    bot = Bot(app, {"id": 2, "first_name": "Parent"}, 2, "private-login")
+    bot.message({"text": "/login"})
+    text = messages[-1]["text"]
+    matches = re.findall(r"\b[A-Za-z0-9_-]{40,60}\b", text)
+    assert len(matches) == 1
+    code = matches[0]
+    browser = app.test_client()
+    authorized = browser.post("/api/auth/code", json={"code": code})
+    assert authorized.status_code == 200, authorized.json
+    replay = browser.post("/api/auth/code", json={"code": code})
+    assert replay.status_code == 401
+    bot.message({"text": "/login"})
+    refreshed = re.findall(r"\b[A-Za-z0-9_-]{40,60}\b", messages[-1]["text"])[0]
+    assert refreshed != code
+    app.clock[0] += 301
+    expired = browser.post("/api/auth/code", json={"code": refreshed})
+    assert expired.status_code == 401
+
+
+def test_web_login_code_cannot_be_issued_in_group_chat(app):
+    messages = capture(app)
+    bot = Bot(app, {"id": 2, "first_name": "Parent"}, -10012345, "group-login")
+    with pytest.raises(Problem):
+        bot.message({"text": "/login"})
+    with connect(app.config["DATABASE"]) as db:
+        assert db.execute("SELECT count(*) FROM login_codes").fetchone()[0] == 0
+    assert messages == []
+
+
+def test_admin_login_command_remains_admin_menu(app):
+    messages = capture(app)
+    bot = Bot(app, {"id": 1, "first_name": "Expert"}, 1, "admin-login")
+    bot.message({"text": "/login"})
+    assert "Управление специалиста" in messages[-1]["text"]
+    with connect(app.config["DATABASE"]) as db:
+        assert db.execute("SELECT count(*) FROM login_codes").fetchone()[0] == 0

@@ -152,6 +152,7 @@ def create_app(config=None):
         SALES_ENABLED=False,
         NEUROCOINS_LAVA_ENABLED=os.getenv("NEUROCOINS_LAVA_ENABLED") == "1",
         NEUROCOINS_BOT_SPEND_ENABLED=os.getenv("NEUROCOINS_BOT_SPEND_ENABLED") == "1",
+        NEUROCOINS_WEB_ORIGIN=os.getenv("NEUROCOINS_WEB_ORIGIN", ""),
     )
     if config:
         app.config.update(config)
@@ -190,6 +191,12 @@ def create_app(config=None):
                 "Content-Security-Policy": "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org",
             }
         )
+        if request.path in ("/wallet", "/static/wallet.html"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self' data:; connect-src 'self'; form-action 'self'; "
+                "frame-ancestors 'none'"
+            )
         if (
             response.is_json
             and request.path.startswith("/api/")
@@ -223,6 +230,16 @@ def create_app(config=None):
     @app.get("/admin")
     def index():
         return send_from_directory(app.static_folder, "index.html")
+
+    @app.get("/wallet")
+    def standalone_wallet():
+        response = send_from_directory(app.static_folder, "wallet.html")
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; form-action 'self'; "
+            "frame-ancestors 'none'"
+        )
+        return response
 
     @app.get("/health")
     def health():

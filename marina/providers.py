@@ -91,6 +91,20 @@ def invoice(app, attempt):
     except OverflowError:
         raise Problem("Сумма счёта слишком велика", 422)
     require(Decimal(str(amount)) * 100 == d["total"], "Сумма счёта теряет точность")
+    return_path = d.get("return_path", "/")
+    require(return_path in ("/", "/wallet"), "Неверная страница возврата")
+    if return_path == "/wallet":
+        from .neurocoins import configured_web_origin
+
+        return_origin = configured_web_origin(app)
+        require(
+            app.config.get("NEUROCOINS_LAVA_ENABLED") is True and return_origin,
+            "Веб-кабинет пополнения недоступен",
+            403,
+        )
+    else:
+        return_origin = app.config["PUBLIC_URL"]
+    return_base = return_origin.rstrip("/") + return_path
     result = lava(
         app,
         "POST",
@@ -102,9 +116,9 @@ def invoice(app, attempt):
             "amount": amount,
             "periodicity": "ONE_TIME",
             "clientUtm": {"utm_source": attempt["id"]},
-            "successful_return_url": app.config["PUBLIC_URL"] + "/?payment=success",
-            "failure_return_url": app.config["PUBLIC_URL"] + "/?payment=failed",
-            "cancel_return_url": app.config["PUBLIC_URL"] + "/?payment=cancelled",
+            "successful_return_url": return_base + "?payment=success",
+            "failure_return_url": return_base + "?payment=failed",
+            "cancel_return_url": return_base + "?payment=cancelled",
         },
     )
     require(
@@ -154,12 +168,15 @@ def register_providers(app):
     def checkout(id):
         o = object_get(g.db, id, "order", g.actor["id"])
         if o["data"].get("product_snapshot", {}).get("service") == "neurocoins":
+            from .neurocoins import require_external_checkout
+
             require(
                 app.config.get("NEUROCOINS_LAVA_ENABLED") is True
                 and o["data"].get("surface") == "external_web",
                 "Нейро-коины через Lava.top не продаются внутри Telegram",
                 403,
             )
+            require_external_checkout(app)
         if (
             g.actor["role"] == "admin"
             and o["data"].get("product_snapshot", {}).get("service") != "neurocoins"
@@ -191,6 +208,7 @@ def register_providers(app):
             "total": d["total"],
             "title": product["title"],
             "terms": product["terms"],
+            "return_path": ("/wallet" if product.get("service") == "neurocoins" else "/"),
         }
         if d["provider"] == "lava":
             require(

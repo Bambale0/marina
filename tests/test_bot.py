@@ -178,7 +178,16 @@ def test_polling_profile_and_private_identity(app):
     message(5, "1990-01-01")
     assert "Профиль создан" in sent[-1][1]["text"]
     message(6, "/login")
-    assert sent[-1][1]["text"] == "Недостаточно прав"
+    assert "Одноразовый код входа в веб-кабинет" in sent[-1][1]["text"]
+    code = sent[-1][1]["text"].splitlines()[1]
+    assert len(code) >= 40
+    from tests.test_identity import login as telegram_login
+
+    client = telegram_login(app, 2)
+    assert client.get("/api/me").status_code == 200
+    web = app.test_client()
+    assert web.post("/api/auth/code", json={"code": code}).status_code == 200
+    assert web.post("/api/auth/code", json={"code": code}).status_code == 401
     message(7, "/admin")
     assert sent[-1][1]["text"] == "Недостаточно прав"
     message(8, "/admin", user=1)
@@ -196,7 +205,7 @@ def test_polling_profile_and_private_identity(app):
     ]
     assert all("callback_data" in button and "web_app" not in button for button in buttons)
     message(81, "/login", user=1)
-    assert sent[-1][1]["text"] == "Mini App не используется. Управление доступно прямо в Telegram."
+    assert sent[-1][1]["text"] == "Управление специалиста доступно прямо в Telegram."
     assert "callback_data" in sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]
     message(9, "/queue", user=1)
     assert sent[-1][1]["text"] == "Очередь пуста."
