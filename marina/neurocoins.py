@@ -33,6 +33,7 @@ def validate_policy(d):
     for pack in d["packages"]:
         require(
             isinstance(pack, dict)
+            and set(pack) == {"id", "title", "coins", "lava_offer_id"}
             and isinstance(pack.get("id"), str)
             and PACK_ID.fullmatch(pack["id"])
             and pack["id"] not in seen
@@ -49,6 +50,7 @@ def validate_policy(d):
     for item in d["services"]:
         require(
             isinstance(item, dict)
+            and set(item) == {"id", "title", "coins"}
             and item.get("id") == "online_lesson"
             and item["id"] not in seen
             and isinstance(item.get("title"), str)
