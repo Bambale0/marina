@@ -44,7 +44,9 @@ def remote(app, method, url, data=None, headers=None, timeout=8):
             )
             app.logger.warning(
                 "lava_http_error method=%s status=%s attempt_id=%s",
-                method, error.code, attempt_id,
+                method,
+                error.code,
+                attempt_id,
             )
         raise Problem("Внешний сервис недоступен; операция сохранена для проверки", 503) from error
     except (URLError, TimeoutError, ValueError) as error:
