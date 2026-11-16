@@ -29,7 +29,7 @@ Read-only investigation of the deployed release `da4b875d4652d7ddc3d8ef05024c29c
 - Invoice state is persisted before the external call, with a durable outbox and an explicit reconciliation record on failure. This is a safety-positive design and should be retained.
 - Tests run against the deployed code, with real temporary SQLite and mocked payment boundaries: focused set **53 passed**, **one Playwright test failed to launch** because the SentinelX agent account has no Chromium installed at the expected path. This is a test-environment blocker, not evidence of an application assertion failure.
 - `ruff check marina` and `ruff format --check marina tests` passed when run without trying to write Ruff's cache into the read-only release. `ruff check marina tests` reports multiple F401/F811 test-fixture import findings; do not hide these by rewriting fixture assertions.
-- The full non-browser test run was started separately; its final status must be recorded when the background job finishes.
+- The larger non-browser suite was started but timed out after 280 seconds with approximately 48% complete and no reported assertions up to that point. It is **not** a passing complete run; split long-running scenarios or run in CI with sufficient time/resources.
 - This is a focused cross-layer production audit, **not** a claim that all E00–E13 acceptance criteria, AI/content flows, disaster recovery, compliance, or a real payment/refund have passed.
 
 ## Required steps to reopen payments
