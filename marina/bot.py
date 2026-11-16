@@ -2296,7 +2296,7 @@ class Bot:
                             {"id": id},
                         )
                     )
-            if o["status"] in ("requested", "awaiting_videos", "submitted"):
+            if o["status"] in ("awaiting_payment", "requested", "awaiting_videos", "submitted"):
                 buttons.append(
                     (
                         "Закрыть видеоразбор",
@@ -2304,7 +2304,7 @@ class Bot:
                         {"id": id, "route": "video-tasks", "command": "close"},
                     )
                 )
-            if d.get("manual_payment", {}).get("status") != "confirmed":
+            if not d.get("paid_at") and d.get("manual_payment", {}).get("status") != "confirmed":
                 buttons.append(("Подтвердить оплату", "admin_video_payment_start", {"id": id}))
         elif o["kind"] == "video_review":
             buttons = [

@@ -23,6 +23,18 @@ app = consultation_app
 
 
 def submit_existing(admin, owner, task, raw):
+    if task["status"] == "awaiting_payment":
+        paid = admin.post(
+            "/api/admin/video-tasks/" + task["id"] + "/confirm-payment",
+            json={
+                "revision": task["revision"],
+                "amount_rub": task["data"]["amount_rub"],
+                "reference": "Synthetic account transfer for audio security test",
+                "reason": "Synthetic paid task fixture prerequisite",
+            },
+        )
+        assert paid.status_code == 200, paid.json
+        task = paid.json
     assigned = admin.post(
         "/api/admin/video-tasks/" + task["id"] + "/assignment",
         json={

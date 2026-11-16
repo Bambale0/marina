@@ -141,7 +141,7 @@ def test_legacy_route_defaults_and_new_task_ignore_duration_without_rewriting_po
 
 
 def test_existing_legacy_video_task_can_be_replayed_without_fingerprint_conflict(app):
-    _, owner, task = task_setup(app)
+    _, owner, task = task_setup(app, paid=False)
     lead_id = task["data"]["lead_id"]
     with transaction(app.config["DATABASE"]) as db:
         lead = object_get(db, lead_id)
@@ -180,8 +180,8 @@ def test_existing_legacy_video_task_can_be_replayed_without_fingerprint_conflict
         assert db.execute("SELECT COUNT(*) FROM objects WHERE kind='video_task'").fetchone()[0] == 1
         assert (
             db.execute(
-                "SELECT COUNT(*) FROM outbox WHERE object_id=? AND event='video_task.requested'",
+                "SELECT COUNT(*) FROM outbox WHERE object_id=? AND event='video_task.paid'",
                 (task["id"],),
             ).fetchone()[0]
-            == 1
+            == 0
         )
