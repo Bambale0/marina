@@ -34,8 +34,12 @@ def remote(app, method, url, data=None, headers=None, timeout=8):
             utm = data.get("clientUtm") if isinstance(data, dict) else None
             marker = utm.get("utm_source") if isinstance(utm, dict) else None
             attempt_id = (
-                marker if isinstance(marker, str) and len(marker) == 32
-                and all(char in "0123456789abcdef" for char in marker)
+                marker
+                if (
+                    isinstance(marker, str)
+                    and len(marker) == 32
+                    and all(char in "0123456789abcdef" for char in marker)
+                )
                 else "-"
             )
             app.logger.warning(
