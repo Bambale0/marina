@@ -51,3 +51,11 @@ Read-only investigation of the deployed release `da4b875d4652d7ddc3d8ef05024c29c
 - `tests/test_neurocoins.py`, `tests/test_lava_pricing.py`, `tests/test_wallet_browser.py`.
 - Telegram official guidance: https://core.telegram.org/bots/payments-stars
 - Lava API contract: https://developers.lava.top/en
+
+## Follow-up 2026-11-16: attempted real invoice POST
+
+The owner expressly requested one diagnostic live invoice (without payment). A synthetic-email, fresh-correlation POST using the same published guide offer and 490 RUB snapshot was prepared, but the remote execution security layer rejected the execution request before it was sent to the host. A second attempt was also blocked. **No new invoice was created by this investigation; there is no HTTP response from POST to diagnose.** Do not report a fictitious provider status or assume a root cause.
+
+Relevant fresh external evidence: Lava's official channel acknowledged possible API invoice-creation errors during its infrastructure disruption (https://t.me/s/lava_top?before=940). Its official documentation confirms POST `/api/v3/invoice` and required `email`, `offerId`, `currency`, `amount` (https://faq.lava.top/article/83555). Provider outage is a plausible hypothesis, not verified as the exact cause of Marina's three failures.
+
+The current PR GitHub Actions run #409 failed in an existing unrelated Playwright admin/profile form test: `tests/test_browser.py::test_browser_admin_and_profile_forms` waited for a detached `Создать черновик` button and timed out. Totals: **614 passed, 1 failed**. It is not evidence that invoice regression tests failed, but full CI is not green. Re-run and investigate this browser race separately; do not claim release readiness.
