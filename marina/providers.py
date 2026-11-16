@@ -27,7 +27,29 @@ def remote(app, method, url, data=None, headers=None, timeout=8):
     try:
         with urlopen(req, timeout=timeout) as response:
             return json.load(response)
-    except (URLError, HTTPError, TimeoutError, ValueError) as error:
+    except HTTPError as error:
+        # The upstream response can contain buyer data or credentials. Log only
+        # the provider's HTTP status and our own immutable attempt identifier.
+        if url.startswith("https://gate.lava.top/"):
+            utm = data.get("clientUtm") if isinstance(data, dict) else None
+            marker = utm.get("utm_source") if isinstance(utm, dict) else None
+            attempt_id = (
+                marker
+                if (
+                    isinstance(marker, str)
+                    and len(marker) == 32
+                    and all(char in "0123456789abcdef" for char in marker)
+                )
+                else "-"
+            )
+            app.logger.warning(
+                "lava_http_error method=%s status=%s attempt_id=%s",
+                method,
+                error.code,
+                attempt_id,
+            )
+        raise Problem("Внешний сервис недоступен; операция сохранена для проверки", 503) from error
+    except (URLError, TimeoutError, ValueError) as error:
         # Includes neither URL with bot token nor upstream response body.
         raise Problem("Внешний сервис недоступен; операция сохранена для проверки", 503) from error
 
