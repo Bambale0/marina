@@ -132,6 +132,14 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
             issue = "duplicate_payment"
         elif not booking_open_for_payment(db, booking["id"], order["owner"]):
             issue = "booking_not_confirmed"
+    if not issue and d.get("video_task_id"):
+        from .video_tasks import payment_confirmed
+
+        task = object_get(db, d["video_task_id"], "video_task", order["owner"])
+        if payment_confirmed(task):
+            issue = "duplicate_payment"
+        elif task["status"] != "awaiting_payment":
+            issue = "video_task_not_payable"
     db.execute(
         "INSERT INTO receipts VALUES(?,?,?,?,?,?,?,?)",
         (
@@ -148,7 +156,13 @@ def confirm(db, order, provider, charge, amount, currency, paid_at, now, telegra
     if issue:
         reconcile(db, order, now, issue, charge)
         if (
-            issue in ("duplicate_payment", "late_payment", "booking_not_confirmed")
+            issue
+            in (
+                "duplicate_payment",
+                "late_payment",
+                "booking_not_confirmed",
+                "video_task_not_payable",
+            )
             and order["status"] != "paid"
         ):
             return update(db, order, now, status="paid_review")
@@ -187,6 +201,11 @@ def checkout_open(db, order, now):
         return False
     if order["data"].get("booking_id"):
         return booking_open_for_payment(db, order["data"]["booking_id"], order["owner"])
+    if order["data"].get("video_task_id"):
+        from .video_tasks import payment_confirmed
+
+        task = object_get(db, order["data"]["video_task_id"], "video_task", order["owner"])
+        return task["status"] == "awaiting_payment" and not payment_confirmed(task)
     run_id = order["data"].get("run_id")
     if not run_id:
         return True
@@ -310,6 +329,28 @@ def fulfill(db, order, paid_at, now):
             )
             if d.get("consultation_run_id") and d.get("access_source") != "admin":
                 emit(db, order["owner"], obj["id"], "consultation.paid", now)
+        elif service == "video_task":
+            from .video_tasks import payment_confirmed
+
+            obj = object_get(db, d.get("video_task_id"), "video_task", order["owner"])
+            require(
+                obj["status"] == "awaiting_payment" and not payment_confirmed(obj),
+                "Видеоразбор уже оплачен или закрыт",
+                409,
+            )
+            require(
+                obj["data"].get("amount_rub") * 100 == d["total"],
+                "Сумма видеоразбора не совпадает с заявкой",
+                409,
+            )
+            obj = update(
+                db,
+                obj,
+                now,
+                {**obj["data"], "order_id": order["id"], "paid_at": paid_at},
+                "requested",
+            )
+            emit(db, order["owner"], obj["id"], "video_task.paid", now)
         db.execute(
             "INSERT INTO intent_fulfillments VALUES(?,?,?,?)",
             (
@@ -747,6 +788,7 @@ def register_commerce(app):
             return (
                 admin_fulfill(g.db, obj, g.actor["id"], g.now)
                 if g.actor["role"] == "admin"
+                and q["data"]["product_snapshot"]["service"] not in ("video_task", "neurocoins")
                 else obj
             )
 

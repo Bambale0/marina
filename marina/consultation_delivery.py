@@ -45,7 +45,7 @@ def notify_specialist_event(app, owner, id, event):
                 + obj["data"]["assignment"]
                 + "\n\nСнимите выполнение ребёнком: "
                 + str(obj["data"]["rules"]["required_videos"])
-                + " видео. Ограничения по длительности нет. Условия оплаты согласуются со специалистом лично."
+                + " видео. Ограничения по длительности нет. Оплата уже подтверждена."
             )
         elif event == "video_task.close":
             text = "Видеоразбор закрыт специалистом. Если хотите продолжить, свяжитесь со специалистом лично."
@@ -93,6 +93,27 @@ def notify_specialist_event(app, owner, id, event):
                     ),
                 )
         return
+    if event == "video_task.paid":
+        from .video_tasks import payment_confirmed
+
+        if not payment_confirmed(obj):
+            return
+        if not account["blocked"]:
+            bot = Bot(
+                app,
+                {"id": account["telegram_id"], "first_name": account["name"]},
+                account["telegram_id"],
+                "video-task:" + id + ":paid",
+            )
+            send_once(
+                app,
+                event + ":" + id + ":client",
+                lambda: bot.send(
+                    "✅ Оплата видеоразбора подтверждена. Специалист получил заявку "
+                    "и подготовит задание. Когда задание придёт, загрузите видео его выполнения.",
+                    [("Открыть видеоразбор", "video_task_open", {"id": id})],
+                ),
+            )
     require(app.config["ADMIN_TELEGRAM_IDS"], "Укажите специалиста для уведомлений")
     for chat in sorted(app.config["ADMIN_TELEGRAM_IDS"]):
         key = event + ":" + id + ":admin:" + str(chat)
@@ -126,6 +147,8 @@ def notify_specialist_event(app, owner, id, event):
                     + (
                         "видео получены, нужен разбор и рекомендации"
                         if event.endswith("submitted")
+                        else "оплата подтверждена, родитель ждёт задания специалиста"
+                        if event.endswith("paid")
                         else "родитель ждёт задания специалиста"
                     )
                     + "\nКлиент: "

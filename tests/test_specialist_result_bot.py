@@ -206,7 +206,7 @@ def test_cancelled_specialist_prompt_cannot_publish_stale_uploaded_pdf(app):
 
 
 def test_specialist_can_record_manual_payment_without_inventing_provider_receipt(app):
-    _, owner, task = task_setup(app)
+    _, owner, task = task_setup(app, paid=False)
     telegram = Telegram(app)
     telegram.bot(1).admin_card(task["id"])
     telegram.click(telegram.button("Подтвердить оплату"))
@@ -216,10 +216,11 @@ def test_specialist_can_record_manual_payment_without_inventing_provider_receipt
     assert saved["data"]["manual_payment"]["status"] == "confirmed"
     assert saved["data"]["manual_payment"]["amount_rub"] == task["data"]["amount_rub"]
     assert "reference" not in saved["data"]["manual_payment"]
-    assert saved["status"] == task["status"]
+    assert task["status"] == "awaiting_payment"
+    assert saved["status"] == "requested"
     telegram.bot(2).card(task["id"], "video_task")
     assert any(
-        "Оплата подтверждена специалистом" in message.get("text", "")
+        "Оплата подтверждена" in message.get("text", "")
         for endpoint, message in telegram.calls
         if endpoint == "sendMessage" and message.get("chat_id") == 2
     )

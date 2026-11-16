@@ -58,6 +58,8 @@ def journey_for(db, run):
 
 def order_payment_label(db, order):
     data = order["data"]
+    if data.get("video_task_id") and data.get("currency") == "RUB":
+        return "💳 Оплатить видеоразбор за " + display_price(data["total"])
     run_id = data.get("consultation_run_id")
     if not run_id or data.get("currency") != "RUB":
         return "💳 Оплатить"
@@ -383,7 +385,9 @@ def register_consultation_journey(app):
 
         def create():
             obj = insert(g.db, "consultation_lead", payload, g.now, g.actor["id"], status="new")
-            emit(g.db, obj["owner"], obj["id"], "consultation.lead", g.now)
+            # A paid video task notifies the specialist only after provider confirmation.
+            if not (d["route"] == "baby_0_2" and d["action"] == "booking"):
+                emit(g.db, obj["owner"], obj["id"], "consultation.lead", g.now)
             audit(
                 g.db,
                 g.actor["id"],

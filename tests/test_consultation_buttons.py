@@ -115,6 +115,7 @@ def test_age_information_and_outside_contact_labels_come_from_author_source(app)
 
 def test_outside_video_order_button_preserves_booking_action(app):
     route_setup(app)
+    app.config.update(VIDEO_TASK_LAVA_ENABLED=True, LAVA_VIDEO_TASK_OFFER_ID="fixture-video-offer")
     calls = []
     app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: calls.append(data) or {
         "ok": True,
@@ -131,7 +132,13 @@ def test_outside_video_order_button_preserves_booking_action(app):
 
     click(app, labels(order)[0], 99001)
 
-    assert any("Заявка на видеоразбор передана специалисту" in d.get("text", "") for d in calls)
+    assert any("Сначала оплатите видеоразбор" in d.get("text", "") for d in calls)
+    assert any(
+        "Оплатить видеоразбор за 1 900 ₽" in button.get("text", "")
+        for message in calls
+        for row in message.get("reply_markup", {}).get("inline_keyboard", [])
+        for button in row
+    )
     assert not any(d.get("text") == "Выберите действие" for d in calls)
     with connect(app.config["DATABASE"]) as db:
         lead = db.execute(
@@ -143,6 +150,7 @@ def test_outside_video_order_button_preserves_booking_action(app):
             (bot.owner,),
         ).fetchone()
     assert json.loads(lead[0])["action"] == "booking"
+    assert json.loads(task[0])["paid_at"] is None
     assert task
 
 
