@@ -24,7 +24,8 @@ Read-only investigation of the deployed release `da4b875d4652d7ddc3d8ef05024c29c
 
 ### Other project audit findings
 
-- `marina-web`, `marina-poll`, `marina-worker`: active/running at inspection.
+- `marina-web`, `marina-poll`, `marina-worker`, `marina-redis`, `marina-backup.timer` and `marina-autodeploy.timer`: active at inspection. Both local and public `/health` returned HTTP 200.
+- The live outbox had zero overdue pending jobs. There were 117 backup files under the backup directory, with the newest roughly 10 hours old. Backup existence is **not** a demonstrated restore test.
 - Financial SQLite `PRAGMA integrity_check` returns `ok`; `foreign_key_check` returns zero violations.
 - Invoice state is persisted before the external call, with a durable outbox and an explicit reconciliation record on failure. This is a safety-positive design and should be retained.
 - Tests run against the deployed code, with real temporary SQLite and mocked payment boundaries: focused set **53 passed**, **one Playwright test failed to launch** because the SentinelX agent account has no Chromium installed at the expected path. This is a test-environment blocker, not evidence of an application assertion failure.
