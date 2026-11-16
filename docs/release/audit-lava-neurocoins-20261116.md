@@ -59,3 +59,25 @@ The owner expressly requested one diagnostic live invoice (without payment). A s
 Relevant fresh external evidence: Lava's official channel acknowledged possible API invoice-creation errors during its infrastructure disruption (https://t.me/s/lava_top?before=940). Its official documentation confirms POST `/api/v3/invoice` and required `email`, `offerId`, `currency`, `amount` (https://faq.lava.top/article/83555). Provider outage is a plausible hypothesis, not verified as the exact cause of Marina's three failures.
 
 The current PR GitHub Actions run #409 failed in an existing unrelated Playwright admin/profile form test: `tests/test_browser.py::test_browser_admin_and_profile_forms` waited for a detached `Создать черновик` button and timed out. Totals: **614 passed, 1 failed**. It is not evidence that invoice regression tests failed, but full CI is not green. Re-run and investigate this browser race separately; do not claim release readiness.
+
+## Live read-only smoke run — 2026-11-16 13:55–14:00 UTC
+
+**Target:** production `neuron`, deployed `/opt/marina/current` = `da4b875d4652d7ddc3d8ef05024c29c2e679af43`. These were live HTTP/service/database probes, not deployment or a replay of payment POST. The diagnostic PR is not deployed.
+
+| Probe | Verified result |
+| --- | --- |
+| `marina-web`, `marina-poll`, `marina-worker`, `marina-redis` | All `active/running`, systemd `NRestarts=0` |
+| `marina-backup.timer`, `marina-autodeploy.timer` | Both active, scheduled |
+| Public HTTPS `/`, `/health`, `/wallet` | HTTP 200; TLS verification passed |
+| Anonymous `/api/me` and `/api/wallet` | HTTP 401, no anonymous account access |
+| Local HTTP `/health` | HTTP 301 to HTTPS (expected nginx redirect), not a failed public health |
+| Authenticated Lava `GET /api/v2/products?feedVisibility=ALL` | HTTP 200, 6 products |
+| SQLite `PRAGMA integrity_check` and `foreign_key_check` | `ok` and zero violations |
+| Outbox | 0 overdue pending, 1 future `funnel.cart.last` due 14:05:06 UTC, **3 failed `invoice.create`** |
+| Payments | 3 `payment_attempt: uncertain`, 3 `reconciliation: open`, 0 receipts |
+| Neurocoin policy and wallet ledger | 0 `neurocoins` policies, 0 ledger entries |
+| Backups | `marina-backup.service` last exit successful; 117 files, latest 03:00:13 UTC, ~148 MB; **restore not tested** |
+| Recent errors | 0 journal lines at priority `err` for web/poll/worker over 30 minutes, **not a complete log audit** |
+| Capacity | Root filesystem 34% used (161 GiB available), 3.1 GiB RAM available, swap 511 MiB / 511 MiB in use |
+
+**Not covered / FAIL to establish:** the direct Telegram Bot API `getMe/getWebhookInfo` smoke was blocked at the remote execution security layer (no request result), so bot identity, update delivery, and actual replies were not validated. A real Lava invoice POST was also blocked earlier, and this run deliberately did not bypass the restriction or replay ambiguous attempts. No genuine end-to-end checkout, provider webhook, receipt, Neurocoin credit/spend, or content delivery test passed. The `/wallet` page being HTTP 200 only means the HTML is served; the live top-up feature remains unconfigured and disabled. HTTP 200 from Lava's product listing does **not** prove invoice-write permission. Production commercial release gate: **not ready**.
