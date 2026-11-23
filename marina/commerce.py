@@ -11,9 +11,24 @@ from .screening import idempotent
 
 def provider_enabled(app, provider):
     """Availability for new invoices; historical events remain processable."""
-    return provider in ("lava", "stars") and provider in app.config.get(
+    if provider not in ("lava", "stars", "tbank") or provider not in app.config.get(
         "ENABLED_PAYMENT_PROVIDERS", ["lava"]
-    )
+    ):
+        return False
+    if provider == "tbank":
+        return bool(
+            app.config.get("TBANK_TERMINAL_KEY")
+            and app.config.get("TBANK_PASSWORD")
+            and str(app.config.get("PUBLIC_URL", "")).startswith("https://")
+        )
+    return True
+
+
+def rub_provider(app):
+    """Configured primary for NEW RUB orders; existing orders keep their provider."""
+    provider = app.config.get("PRIMARY_RUB_PROVIDER", "lava")
+    require(provider in ("lava", "tbank"), "Неверный основной провайдер платежей", 503)
+    return provider
 
 
 def policies(db, type, scope=None):
@@ -405,6 +420,48 @@ def process_payment_event(app, event_id, now):
                 now,
                 p["telegram_id"],
             )
+        elif data["provider"] == "tbank":
+            from .tbank import check_state
+
+            row = db.execute(
+                "SELECT * FROM objects WHERE id=? AND kind='payment_attempt'",
+                (p.get("attempt_id"),),
+            ).fetchone()
+            if row:
+                attempt = unpack(row)
+                require(attempt["data"].get("provider") == "tbank", "Неверный провайдер", 409)
+                check = check_state(app, db, attempt, now, p["provider_id"])
+                if not db.execute(
+                    "SELECT 1 FROM receipts WHERE provider='tbank' AND charge=?",
+                    (p["provider_id"],),
+                ).fetchone():
+                    require(
+                        str(check.get("status", "")).upper()
+                        in ("AUTHORIZED", "NEW", "FORM_SHOWED"),
+                        "Платёж Т-Банка требует ручной сверки",
+                        409,
+                    )
+                    return False
+            else:
+                existing = db.execute(
+                    "SELECT 1 FROM objects WHERE kind='reconciliation' "
+                    "AND json_extract(data,'$.payment_event_id')=?",
+                    (event["id"],),
+                ).fetchone()
+                if not existing:
+                    insert(
+                        db,
+                        "reconciliation",
+                        {
+                            "issue": "unmatched_tbank_payment",
+                            "provider_id": p["provider_id"],
+                            "attempt_id": p.get("attempt_id"),
+                            "payment_event_id": event["id"],
+                        },
+                        now,
+                        status="open",
+                    )
+                return False
         else:
             from .providers import check_lava
 
@@ -525,7 +582,7 @@ def register_commerce(app):
         from .scope import require_service
 
         require_service(g.db, product["service"])
-        provider = "stars" if product["currency"] == "XTR" else "lava"
+        provider = "stars" if product["currency"] == "XTR" else rub_provider(app)
         require(provider_enabled(app, provider), "Этот способ оплаты отключён")
         if product["service"] == "guide":
             from .funnel import guide_quote, lava_guide_ready
@@ -698,7 +755,7 @@ def register_commerce(app):
             "lines": lines,
             "total": sum(line["amount"] for line in lines),
             "currency": product["currency"],
-            "provider": "stars" if product["currency"] == "XTR" else "lava",
+            "provider": provider,
             "surface": surface,
             "expires": g.now + rules["quote_ttl_seconds"],
             **extra,

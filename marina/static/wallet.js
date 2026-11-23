@@ -110,15 +110,16 @@ async function loadWallet() {
         + " · " + new Date(item.created * 1000).toLocaleString("ru")));
     }
   } else history.append(make("p", {}, "Операций пока нет."));
+  const providerName = wallet.primary_payment_provider === "tbank" ? "Т-Банк" : "Lava.top";
   const content = [page, history];
   if (!wallet.enabled || !wallet.web_topup_enabled) {
     content.push(make("section", { class: "card" },
       make("h2", {}, "Пополнение пока недоступно"),
-      make("p", {}, "Специалист готовит утверждённые условия и безопасный платёжный маршрут Lava.top. Новые счета не создаются."),
+      make("p", {}, "Специалист готовит утверждённые условия и безопасный платёжный маршрут " + providerName + ". Новые счета не создаются."),
     ));
   } else {
     const form = make("form", { class: "card stack" },
-      make("h2", {}, "Пополнить через Lava.top"),
+      make("h2", {}, "Пополнить через " + providerName),
       make("p", {}, "После подтверждения платежа монеты будут зачислены на ваш баланс."),
     );
     const packageSelect = make("select");
@@ -140,7 +141,7 @@ async function loadWallet() {
     }
     const email = make("input", { type: "email", required: true, placeholder: "email@example.com" });
     const accepted = make("input", { type: "checkbox", required: true });
-    const submit = make("button", { type: "submit" }, "Получить счёт Lava.top");
+    const submit = make("button", { type: "submit" }, "Получить счёт " + providerName);
     form.append(
       make("details", {},
         make("summary", {}, "Прочитать условия использования Нейро-коинов"),
@@ -151,7 +152,7 @@ async function loadWallet() {
       make("label", {}, "Email для чека", email),
       make("label", {}, accepted, " Принимаю условия предоставления Нейро-коинов и оферту."),
       submit,
-      make("p", { class: "quiet" }, "Оплата не подтверждается кнопкой «Оплатил». Зачисление происходит только после проверки Lava.top."),
+      make("p", { class: "quiet" }, "Оплата не подтверждается кнопкой «Оплатил». Зачисление происходит только после проверки " + providerName + "."),
     );
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -185,13 +186,14 @@ async function loadWallet() {
 async function showPaymentStatus() {
   if (!currentOrder) return;
   const result = await api("/wallet/topups/" + encodeURIComponent(currentOrder));
+  const providerName = wallet?.primary_payment_provider === "tbank" ? "Т-Банк" : "Lava.top";
   const status = make("section", { class: "card stack" }, make("h2", {}, "Статус счёта"));
   if (result.status === "paid") {
     status.append(make("p", {}, "Платёж подтверждён. Текущий баланс: " + result.balance + " НК."));
   } else if (result.attempt_status === "uncertain") {
     status.append(make("p", {}, "Создание счёта требует проверки специалистом. Не создавайте повторный платёж."));
   } else if (result.payment_url) {
-    const link = make("a", { href: result.payment_url, target: "_self" }, "Перейти к оплате через Lava.top");
+    const link = make("a", { href: result.payment_url, target: "_self" }, "Перейти к оплате через " + providerName);
     status.append(link, make("p", {}, "После оплаты вернитесь сюда и проверьте статус."));
   } else {
     status.append(make("p", {}, "Счёт обрабатывается. Повторно нажмите «Проверить статус» позднее."));

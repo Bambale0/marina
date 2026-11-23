@@ -72,17 +72,23 @@ def price_text(product):
 
 
 def lava_guide_ready(app, product):
-    from .commerce import provider_enabled
+    from .commerce import provider_enabled, rub_provider
 
     data = product["data"]
-    return bool(
-        provider_enabled(app, "lava")
-        and data.get("currency") == "RUB"
+    provider = rub_provider(app)
+    if not (
+        data.get("currency") == "RUB"
         and data.get("web_sales_approved") is True
-        and data.get("lava_offer_id")
+        and provider_enabled(app, provider)
+        and str(app.config.get("PUBLIC_URL", "")).startswith("https://")
+    ):
+        return False
+    if provider == "tbank":
+        return True
+    return bool(
+        data.get("lava_offer_id")
         and app.config.get("LAVA_API_KEY")
         and app.config.get("LAVA_WEBHOOK_SECRET")
-        and str(app.config.get("PUBLIC_URL", "")).startswith("https://")
     )
 
 
@@ -452,10 +458,10 @@ def guide_paid(db, order, right, now):
 
 def guide_quote(db, actor, p, d, now, allow_external_lava=False):
     """Use the existing quote/order/receipt pipeline for an age-only guide purchase."""
-    from .commerce import is_admin, policies, provider_enabled
+    from .commerce import is_admin, policies, provider_enabled, rub_provider
 
     admin = is_admin(db, actor)
-    provider = "stars" if p["data"]["currency"] == "XTR" else "lava"
+    provider = "stars" if p["data"]["currency"] == "XTR" else rub_provider(current_app)
     require(admin or provider_enabled(current_app, provider), "Этот способ оплаты отключён", 403)
     run = object_get(db, d.get("run_id"), "funnel_run", actor)
     r = run["data"]
@@ -540,7 +546,7 @@ def guide_quote(db, actor, p, d, now, allow_external_lava=False):
         ],
         "total": amount,
         "currency": p["data"]["currency"],
-        "provider": "stars" if p["data"]["currency"] == "XTR" else "lava",
+        "provider": provider,
         "surface": surface,
         "expires": (now + policy["data"]["quote_ttl_seconds"])
         if admin
@@ -1295,6 +1301,10 @@ def register_funnel(app):
         guide_policy = policies(g.db, "commerce", "guide")
         return {
             "integrations": {
+                "rub_primary": app.config.get("PRIMARY_RUB_PROVIDER", "lava"),
+                "tbank_api": bool(
+                    app.config.get("TBANK_TERMINAL_KEY") and app.config.get("TBANK_PASSWORD")
+                ),
                 "lava_api": bool(app.config.get("LAVA_API_KEY")),
                 "lava_webhook": bool(app.config.get("LAVA_WEBHOOK_SECRET")),
                 "public_https": str(app.config.get("PUBLIC_URL", "")).startswith("https://"),
@@ -1894,12 +1904,12 @@ def notify_funnel(app, owner, id, event):
 
         with connect(app.config["DATABASE"]) as db:
             caption = order_payment_label(db, order)
-        lava_checkout = attempt["data"]["provider"] == "lava"
+        label = {
+            "lava": "Счёт готов. Оплатите на защищённой странице Lava.top:",
+            "tbank": "Счёт готов. Оплатите на защищённой странице Т-Банка:",
+            "stars": "Счёт готов. Оплатите в Telegram Stars:",
+        }[attempt["data"]["provider"]]
         bot.send(
-            (
-                "Счёт готов. Оплатите на защищённой странице Lava.top:"
-                if lava_checkout
-                else "Счёт готов. Оплатите в Telegram Stars:"
-            ),
+            label,
             [(caption, "url", {"url": attempt["data"]["url"]})],
         )

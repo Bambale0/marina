@@ -239,7 +239,9 @@ def notify(app, owner, object_id, event):
                 current = balance(db, owner)
             require(account, "Получатель не найден")
             message = (
-                "✅ Подтверждено пополнение Lava.top: +"
+                "✅ Подтверждено пополнение "
+                + ("Т-Банк" if order["data"]["provider"] == "tbank" else "Lava.top")
+                + ": +"
                 + str(obj["data"]["coins"])
                 + " Нейро-коинов."
                 + "\nБаланс: "
@@ -277,7 +279,7 @@ def notify(app, owner, object_id, event):
             order = object_get(db, attempt["data"]["order_id"], "order", owner)
             if order["data"].get("product_snapshot", {}).get("service") == "neurocoins":
                 # External checkout status is shown by the external web application.
-                # Do not send a Lava purchase link into Telegram.
+                # Do not send an external payment link into Telegram.
                 return
             if (
                 attempt["status"] != "ready"
@@ -294,11 +296,11 @@ def notify(app, owner, object_id, event):
             "sendMessage",
             {
                 "chat_id": account["telegram_id"],
-                "text": (
-                    "Счёт готов. Оплатите в Telegram Stars:"
-                    if attempt["data"]["provider"] == "stars"
-                    else "Счёт готов. Оплатите на защищённой странице Lava.top:"
-                ),
+                "text": {
+                    "stars": "Счёт готов. Оплатите в Telegram Stars:",
+                    "lava": "Счёт готов. Оплатите на защищённой странице Lava.top:",
+                    "tbank": "Счёт готов. Оплатите на защищённой странице Т-Банка:",
+                }[attempt["data"]["provider"]],
                 "reply_markup": {
                     "inline_keyboard": [[{"text": caption, "url": attempt["data"]["url"]}]]
                 },
@@ -395,7 +397,12 @@ def work_once(app, send=None):
                 or (
                     order["data"].get("product_snapshot", {}).get("service") == "neurocoins"
                     and (
-                        app.config.get("NEUROCOINS_LAVA_ENABLED") is not True
+                        app.config.get(
+                            "NEUROCOINS_TBANK_ENABLED"
+                            if attempt["data"].get("provider") == "tbank"
+                            else "NEUROCOINS_LAVA_ENABLED"
+                        )
+                        is not True
                         or order["data"].get("surface") != "external_web"
                     )
                 )
@@ -471,7 +478,7 @@ def work_once(app, send=None):
                     run = object_get(db, order["data"]["run_id"], "funnel_run")
                     schedule(db, run, "funnel.invoice." + attempt["id"], now)
                 elif (
-                    attempt["data"]["provider"] == "lava"
+                    attempt["data"]["provider"] in ("lava", "tbank")
                     and order["data"].get("product_snapshot", {}).get("service") != "neurocoins"
                 ):
                     emit(db, attempt["owner"], attempt["id"], "invoice.ready", now)

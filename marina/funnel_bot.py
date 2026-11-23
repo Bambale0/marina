@@ -47,7 +47,7 @@ def show_checkout(bot, attempt):
     if attempt["status"] != "ready":
         bot.send("Готовлю счёт. Ссылка появится в этом чате.")
         return
-    lava_checkout = attempt["data"]["provider"] == "lava"
+    provider = attempt["data"]["provider"]
     caption = "💳 Оплатить"
     if attempt["data"].get("order_id"):
         from .consultation_journey import order_payment_label
@@ -56,11 +56,11 @@ def show_checkout(bot, attempt):
             order = object_get(db, attempt["data"]["order_id"], "order", bot.owner)
             caption = order_payment_label(db, order)
     bot.send(
-        (
-            "Счёт готов. Оплатите на защищённой странице Lava.top:"
-            if lava_checkout
-            else "Счёт готов. Оплатите в Telegram Stars:"
-        ),
+        {
+            "lava": "Счёт готов. Оплатите на защищённой странице Lava.top:",
+            "tbank": "Счёт готов. Оплатите на защищённой странице Т-Банка:",
+            "stars": "Счёт готов. Оплатите в Telegram Stars:",
+        }[provider],
         [(caption, "url", {"url": attempt["data"]["url"]})],
     )
 
@@ -209,13 +209,13 @@ def handle_action(bot, action, d):
                 else "Руководство оплачено. Файл будет доставлен в этот чат."
             )
             return True
-        if order["data"]["provider"] == "lava":
+        if order["data"]["provider"] == "lava" or (
+            order["data"]["provider"] == "tbank" and bot.app.config.get("TBANK_RECEIPT_TAXATION")
+        ):
             bot.state_set(
                 step="funnel_checkout_email", funnel_order_id=order["id"], funnel_run_id=d["id"]
             )
-            bot.send(
-                "Укажите email для электронного чека Lava.top. Он используется только для оформления платежа."
-            )
+            bot.send("Укажите email для электронного чека выбранного банка.")
             return True
         attempt = bot.api("/orders/" + order["id"] + "/checkout", "POST", {})
         show_checkout(bot, attempt)

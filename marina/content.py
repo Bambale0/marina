@@ -351,7 +351,7 @@ def register_content(app):
             )
         ]
         if kind == "product":
-            from .commerce import provider_enabled
+            from .commerce import provider_enabled, rub_provider
             from .scope import service_enabled
 
             rows = [
@@ -359,7 +359,8 @@ def register_content(app):
                 for o in rows
                 if service_enabled(g.db, o["data"].get("service"))
                 and provider_enabled(
-                    current_app, "stars" if o["data"].get("currency") == "XTR" else "lava"
+                    current_app,
+                    "stars" if o["data"].get("currency") == "XTR" else rub_provider(current_app),
                 )
             ]
         if kind == "exercise":

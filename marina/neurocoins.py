@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from flask import g, request
 
 from . import body, object_get, protected, reason, require
-from .commerce import policies, provider_enabled
+from .commerce import policies, provider_enabled, rub_provider
 from .db import audit, emit, insert, uid, update
 from .screening import idempotent
 
@@ -77,7 +77,8 @@ def validate_policy(d):
     for pack in d["packages"]:
         require(
             isinstance(pack, dict)
-            and set(pack) == {"id", "title", "coins", "lava_offer_id"}
+            and {"id", "title", "coins"} <= set(pack)
+            and set(pack) <= {"id", "title", "coins", "lava_offer_id"}
             and isinstance(pack.get("id"), str)
             and PACK_ID.fullmatch(pack["id"])
             and pack["id"] not in seen
@@ -85,9 +86,14 @@ def validate_policy(d):
             and 1 <= len(pack["title"].strip()) <= 100
             and type(pack.get("coins")) is int
             and 1 <= pack["coins"] <= MAX_ENTRY
-            and isinstance(pack.get("lava_offer_id"), str)
-            and 1 <= len(pack["lava_offer_id"]) <= 200,
-            "Проверьте название, номинал и Lava offer ID пакета",
+            and (
+                "lava_offer_id" not in pack
+                or (
+                    isinstance(pack["lava_offer_id"], str)
+                    and 1 <= len(pack["lava_offer_id"]) <= 200
+                )
+            ),
+            "Проверьте название, номинал и необязательный Lava offer ID пакета",
         )
         seen.add(pack["id"])
     seen.clear()
@@ -222,7 +228,7 @@ def fulfill_topup(db, order, paid_at, now):
     d = order["data"]
     pack = d.get("coin_pack")
     require(
-        d.get("provider") == "lava"
+        d.get("provider") in ("lava", "tbank")
         and d.get("currency") == "RUB"
         and isinstance(pack, dict)
         and type(pack.get("coins")) is int
@@ -230,21 +236,22 @@ def fulfill_topup(db, order, paid_at, now):
         and d.get("total") == pack["coins"] * 100,
         "Параметры пополнения не совпадают со снимком заказа",
     )
+    provider = d["provider"]
     receipt = db.execute(
-        "SELECT charge FROM receipts WHERE order_id=? AND provider='lava' "
+        "SELECT charge FROM receipts WHERE order_id=? AND provider=? "
         "AND status='confirmed' AND amount=? AND currency='RUB'",
-        (order["id"], d["total"]),
+        (order["id"], provider, d["total"]),
     ).fetchone()
-    require(receipt, "Монеты начисляются только после подтверждения Lava.top", 409)
+    require(receipt, "Монеты начисляются только после подтверждённого поступления", 409)
     movement = entry(
         db,
         order["owner"],
         pack["coins"],
-        "lava_credit",
+        provider + "_credit",
         order["id"],
         now,
-        "provider:lava",
-        "Подтверждённое поступление Lava.top",
+        "provider:" + provider,
+        "Подтверждённое поступление " + provider,
     )
     credit = insert(
         db,
@@ -263,7 +270,7 @@ def fulfill_topup(db, order, paid_at, now):
     if auto_id and order["status"] != "pending":
         audit(
             db,
-            "provider:lava",
+            "provider:" + provider,
             "neurocoins.auto_purchase_skipped",
             credit,
             now,
@@ -282,12 +289,12 @@ def fulfill_topup(db, order, paid_at, now):
                 d["auto_price_coins"],
                 d["auto_policy_id"],
                 now,
-                "provider:lava",
+                "provider:" + provider,
             )
         except Problem as exc:
             audit(
                 db,
-                "provider:lava",
+                "provider:" + provider,
                 "neurocoins.auto_purchase_skipped",
                 credit,
                 now,
@@ -358,13 +365,19 @@ def register_neurocoins(app):
         ).fetchall()
         return {
             "currency": "NEURO",
+            "primary_payment_provider": rub_provider(app),
             "policy_id": policy["id"] if policy else None,
             "terms": policy["data"]["terms"] if policy else None,
             "balance": balance(g.db, g.actor["id"]),
             "enabled": bool(policy),
             "web_topup_enabled": bool(policy)
-            and app.config.get("NEUROCOINS_LAVA_ENABLED") is True
-            and provider_enabled(app, "lava")
+            and app.config.get(
+                "NEUROCOINS_TBANK_ENABLED"
+                if rub_provider(app) == "tbank"
+                else "NEUROCOINS_LAVA_ENABLED"
+            )
+            is True
+            and provider_enabled(app, rub_provider(app))
             and bool(policy["data"]["packages"])
             and external_origin(app),
             "spend_enabled": bool(policy)
@@ -400,7 +413,12 @@ def register_neurocoins(app):
                 attempt
                 and attempt["status"] == "ready"
                 and checkout_open(g.db, order, g.now)
-                and app.config.get("NEUROCOINS_LAVA_ENABLED") is True
+                and app.config.get(
+                    "NEUROCOINS_TBANK_ENABLED"
+                    if attempt["data"].get("provider") == "tbank"
+                    else "NEUROCOINS_LAVA_ENABLED"
+                )
+                is True
                 and external_origin(app)
             )
             else None
@@ -419,22 +437,28 @@ def register_neurocoins(app):
     def topup():
         d = body()
         # Only standalone, independently compliance-reviewed web checkout.
-        # The Telegram bot must never initiate Lava payment for digital goods.
+        # The Telegram bot must never initiate external payments for digital goods.
+        provider = rub_provider(app)
+        enabled = (
+            app.config.get("NEUROCOINS_TBANK_ENABLED")
+            if provider == "tbank"
+            else app.config.get("NEUROCOINS_LAVA_ENABLED")
+        )
         require(
-            app.config.get("NEUROCOINS_LAVA_ENABLED") is True
-            and d.get("surface") == "external_web",
-            "Оплата Lava.top недоступна в Telegram",
+            enabled is True and d.get("surface") == "external_web",
+            "Внешнее пополнение Нейро-коинов недоступно в Telegram",
             403,
         )
         require_external_checkout(app)
-        require(provider_enabled(app, "lava"), "Приём платежей Lava.top отключён", 503)
-        require(
-            app.config.get("LAVA_API_KEY")
-            and app.config.get("LAVA_WEBHOOK_SECRET")
-            and app.config.get("PUBLIC_URL", "").startswith("https://"),
-            "Lava.top или HTTPS не настроены",
-            503,
-        )
+        require(provider_enabled(app, provider), "Приём платежей отключён", 503)
+        if provider == "lava":
+            require(
+                app.config.get("LAVA_API_KEY")
+                and app.config.get("LAVA_WEBHOOK_SECRET")
+                and app.config.get("PUBLIC_URL", "").startswith("https://"),
+                "Lava.top или HTTPS не настроены",
+                503,
+            )
         p = active_policy(g.db)
         require(p, "Пополнение монет пока не опубликовано", 409)
         require(
@@ -490,7 +514,9 @@ def register_neurocoins(app):
                 "Выберите пакет, покрывающий недостающую сумму",
             )
         snapshot = dict(pack)
-        offer = pack["lava_offer_id"]
+        offer = pack.get("lava_offer_id")
+        if provider == "lava":
+            require(offer, "Для Lava нужен опубликованный offer ID", 503)
 
         def create():
             order = insert(
@@ -513,7 +539,7 @@ def register_neurocoins(app):
                     ],
                     "total": pack["coins"] * 100,
                     "currency": "RUB",
-                    "provider": "lava",
+                    "provider": provider,
                     "surface": "external_web",
                     "auto_booking_id": booking_id,
                     "auto_price_coins": auto_price,
@@ -530,7 +556,7 @@ def register_neurocoins(app):
                 "neurocoins.topup_order",
                 order,
                 g.now,
-                "Пополнение Нейро-коинов через Lava.top",
+                "Пополнение Нейро-коинов через " + provider,
             )
             return order
 
