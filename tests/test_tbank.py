@@ -310,3 +310,22 @@ def test_tbank_refund_notification_creates_review_not_automatic_chargeback(app):
             db.execute("SELECT count(*) FROM objects WHERE kind='reconciliation'").fetchone()[0]
             == 2
         )
+
+
+def test_payment_return_links_to_configured_bot(app):
+    app.config["BOT_USERNAME"] = "fixture_prod_bot"
+    client = app.test_client()
+    response = client.get("/?payment=success")
+    assert response.status_code == 200
+    assert b'href="/bot"' in response.data
+    assert b"abrakadabra25_bot" not in response.data
+    response = client.get("/bot")
+    assert response.status_code == 302
+    assert response.headers["Location"] == "https://t.me/fixture_prod_bot"
+    assert response.headers["Cache-Control"] == "no-store"
+    app.config["BOT_USERNAME"] = "fixture_dev_bot"
+    assert client.get("/bot").headers["Location"] == "https://t.me/fixture_dev_bot"
+    app.config["BOT_USERNAME"] = ""
+    assert client.get("/bot").status_code == 503
+    app.config["BOT_USERNAME"] = "https://example.test"
+    assert client.get("/bot").status_code == 503

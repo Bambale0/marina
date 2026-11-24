@@ -3,12 +3,13 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl
 
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, redirect, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from .db import SCHEMA, audit, connect, insert, transaction, uid, unpack, update
@@ -135,6 +136,7 @@ def create_app(config=None):
             "FUNNEL_SOURCE_PATH", "/var/lib/marina/content/screening_scenario.json"
         ),
         BOT_TOKEN=os.getenv("BOT_TOKEN", ""),
+        BOT_USERNAME=os.getenv("BOT_USERNAME", ""),
         ADMIN_TELEGRAM_IDS={int(v) for v in os.getenv("ADMIN_TELEGRAM_IDS", "").split(",") if v},
         CLOCK=time.time,
         MAX_CONTENT_LENGTH=20 * 1024 * 1024,
@@ -238,6 +240,18 @@ def create_app(config=None):
     @app.get("/admin")
     def index():
         return send_from_directory(app.static_folder, "index.html")
+
+    @app.get("/bot")
+    def open_bot():
+        username = app.config["BOT_USERNAME"].strip().removeprefix("@")
+        require(
+            re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username),
+            "Telegram-бот не настроен",
+            503,
+        )
+        response = redirect("https://t.me/" + username)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/wallet")
     def standalone_wallet():
