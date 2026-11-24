@@ -115,3 +115,61 @@ def test_marketing_choice_saves_on_first_telegram_click(
         assert "Синтетический вопрос " + group in sent[-1]["text"]
     else:
         assert "Добавить ребёнка" in str(sent[-1]["reply_markup"])
+
+
+@pytest.mark.parametrize("choice", [None, True, False])
+def test_start_recovers_missing_marketing_choice_without_repeating_consent(app, tmp_path, choice):
+    admin, owner = login(app), login(app, 2)
+    policy = privacy(admin)
+    configure_funnel_source(app, tmp_path)
+    scenario(admin, "3-4")
+    assert (
+        owner.post(
+            "/api/consents",
+            json={"policy_id": policy["id"], "accepted": True, "representative_confirmed": True},
+        ).status_code
+        == 200
+    )
+    if choice is not None:
+        assert (
+            owner.post(
+                "/api/marketing-consents", json={"policy_id": policy["id"], "accepted": choice}
+            ).status_code
+            == 200
+        )
+
+    sent = []
+    app.config["HTTP_TRANSPORT"] = lambda method, url, data, headers: (
+        sent.append(data) if url.endswith("/sendMessage") else None
+    ) or {"ok": True, "result": {}}
+    app.config["FILE_TRANSPORT"] = lambda *args: None
+    user, chat = {"id": 2, "first_name": "Fixture"}, {"id": 2, "type": "private"}
+
+    def start(update_id):
+        handle_update(
+            app, {"update_id": update_id, "message": {"from": user, "chat": chat, "text": "/start"}}
+        )
+
+    start(31001)
+    if choice is None:
+        assert "Это необязательно" in sent[-1]["text"]
+        button = sent[-1]["reply_markup"]["inline_keyboard"][0][0]
+        assert button["text"] == "Да, получать предложения"
+        handle_update(
+            app,
+            {
+                "update_id": 31002,
+                "callback_query": {
+                    "id": "marketing-start",
+                    "from": user,
+                    "data": button["callback_data"],
+                    "message": {"chat": chat},
+                },
+            },
+        )
+        assert "Это необязательно" not in sent[-1]["text"]
+        assert owner.get("/api/privacy").json["marketing_choice"] is True
+        start(31003)
+    assert "Это необязательно" not in sent[-1]["text"]
+    assert "3–4" in str(sent[-1]["reply_markup"])
+    assert owner.get("/api/privacy").json["accepted"] is True

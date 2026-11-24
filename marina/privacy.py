@@ -7,17 +7,25 @@ from .commerce import policies
 from .db import audit, connect, insert, unpack, update
 
 
-def marketing_allowed(db, actor):
-    policy = policies(db, "privacy")
-    if not policy or not policy["data"].get("require_marketing_consent"):
-        return True
+def marketing_choice(db, actor, policy):
+    if not policy:
+        return None
     row = db.execute(
         "SELECT data FROM objects WHERE kind='marketing_consent' AND owner=? "
         "ORDER BY created DESC,rowid DESC LIMIT 1",
         (actor,),
     ).fetchone()
     choice = json.loads(row["data"]) if row else {}
-    return choice.get("accepted") is True and choice.get("policy_id") == policy["id"]
+    if choice.get("policy_id") == policy["id"] and type(choice.get("accepted")) is bool:
+        return choice["accepted"]
+    return None
+
+
+def marketing_allowed(db, actor):
+    policy = policies(db, "privacy")
+    if not policy or not policy["data"].get("require_marketing_consent"):
+        return True
+    return marketing_choice(db, actor, policy) is True
 
 
 def offer_accepted(db, actor):
@@ -254,7 +262,11 @@ def register_privacy(app):
                 (g.actor["id"], p["id"]),
             ).fetchone()
         )
-        return {"policy": p, "accepted": accepted}
+        return {
+            "policy": p,
+            "accepted": accepted,
+            "marketing_choice": marketing_choice(g.db, g.actor["id"], p),
+        }
 
     @app.post("/api/consents")
     @protected()

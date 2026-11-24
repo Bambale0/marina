@@ -710,10 +710,41 @@ class Bot:
             ],
         )
 
+    def marketing_prompt(self, privacy, next_action, choice=None, force=False):
+        policy = privacy["policy"]
+        if not policy or not policy["data"].get("require_marketing_consent"):
+            return False
+        if not force and privacy.get("marketing_choice") is not None:
+            return False
+        self.send(
+            policy["data"].get(
+                "marketing_consent_text",
+                "Получать предложения и акции сервиса в Telegram?",
+            )
+            + "\n\nЭто необязательно и не влияет на скрининг, купленные материалы или запись.",
+            [
+                (
+                    label,
+                    "marketing_choice",
+                    {
+                        "id": policy["id"],
+                        "next_action": next_action,
+                        "choice": choice or {},
+                        "accepted": accepted,
+                    },
+                )
+                for label, accepted in (
+                    ("Да, получать предложения", True),
+                    ("Нет, продолжить без рекламы", False),
+                )
+            ],
+        )
+        return True
+
     def privacy_gate(self, next_action="profiles", choice=None):
         privacy = self.api("/privacy")
         if privacy["accepted"]:
-            return True
+            return not self.marketing_prompt(privacy, next_action, choice)
         offer_response = self.client.get("/api/offer")
         offer = offer_response.get_json() if offer_response.status_code == 200 else None
         if self.app.config.get("DEV_OFFER_BYPASSES_CONSENT", False) and offer and offer["accepted"]:
@@ -880,12 +911,16 @@ class Bot:
                 "Документы и управление данными. Отзыв согласия не удаляет обязательные финансовые записи автоматически.",
                 [
                     ("Политика и отдельное согласие", "privacy_documents", {}),
+                    ("Настройки рассылки", "privacy_marketing", {}),
                     ("Выгрузить мои данные", "privacy_export", {}),
                     ("Отозвать согласие", "privacy_revoke", {}),
                     ("Запросить удаление данных", "privacy_delete", {}),
                     ("В меню", "menu", {}),
                 ],
             )
+        elif action == "privacy_marketing":
+            if not self.marketing_prompt(self.api("/privacy"), "privacy_settings", force=True):
+                self.send("Рассылка не требует отдельного выбора.", MENU)
         elif action == "privacy_documents":
             policy = self.api("/privacy")["policy"]
             require(policy, "Политика готовится")
@@ -1299,26 +1334,10 @@ class Bot:
                     {"policy_id": d["id"], "accepted": True, "representative_confirmed": True},
                 )
                 privacy = self.api("/privacy")
-                if privacy["policy"]["data"].get("require_marketing_consent"):
-                    return self.send(
-                        privacy["policy"]["data"].get(
-                            "marketing_consent_text",
-                            "Получать предложения и акции сервиса в Telegram?",
-                        )
-                        + "\n\nЭто необязательно и не влияет на скрининг, купленные материалы или запись.",
-                        [
-                            (
-                                "Да, получать предложения",
-                                "marketing_choice",
-                                {**d, "accepted": True},
-                            ),
-                            (
-                                "Нет, продолжить без рекламы",
-                                "marketing_choice",
-                                {**d, "accepted": False},
-                            ),
-                        ],
-                    )
+                if self.marketing_prompt(
+                    privacy, d.get("next_action", "profiles"), d.get("choice")
+                ):
+                    return
             else:
                 self.api(
                     "/marketing-consents",
@@ -1326,6 +1345,8 @@ class Bot:
                     {"policy_id": d["id"], "accepted": d.get("accepted") is True},
                 )
             if d.get("next_action") in (
+                "welcome",
+                "privacy_settings",
                 "choose_concern",
                 "continue_concern",
                 "custom_concern",
@@ -1341,7 +1362,7 @@ class Bot:
                 "intake_start",
                 "outside_interest",
             ):
-                self.action(d["next_action"], d["choice"])
+                self.action(d["next_action"], d.get("choice") or {})
             else:
                 self.profile_menu()
         elif action == "select":

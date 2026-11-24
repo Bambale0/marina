@@ -67,6 +67,9 @@ def show_checkout(bot, attempt):
 
 def handle_action(bot, action, d):
     if action == "welcome":
+        privacy = bot.api("/privacy")
+        if privacy["accepted"] and bot.marketing_prompt(privacy, "welcome"):
+            return True
         bot.state_set(
             step=None, onboarding=False, age_group=None, concern=None, onboarding_next=None
         )
