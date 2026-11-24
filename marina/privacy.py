@@ -262,11 +262,10 @@ def register_privacy(app):
                 (g.actor["id"], p["id"]),
             ).fetchone()
         )
-        return {
-            "policy": p,
-            "accepted": accepted,
-            "marketing_choice": marketing_choice(g.db, g.actor["id"], p),
-        }
+        result = {"policy": p, "accepted": accepted}
+        if p:
+            result["marketing_choice"] = marketing_choice(g.db, g.actor["id"], p)
+        return result
 
     @app.post("/api/consents")
     @protected()
