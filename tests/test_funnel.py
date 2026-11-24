@@ -681,6 +681,8 @@ def test_admin_renders_text_material_and_lists_tripwire_entities(app):
         "public_https": False,
         "lava_checkout_enabled": False,
         "tripwire_payment_bypass": False,
+        "rub_primary": "lava",
+        "tbank_api": False,
     }
     assert dashboard.json["entities"]["material"]["draft"] == 1
 
