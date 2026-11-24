@@ -5,7 +5,7 @@ import copy
 from flask import g
 
 from . import body, object_get, protected, require
-from .commerce import policies, provider_enabled
+from .commerce import policies, provider_enabled, rub_provider
 from .db import audit, insert, uid, unpack
 from .screening import idempotent
 
@@ -13,8 +13,10 @@ from .screening import idempotent
 def consultation_product(db, run):
     """Resolve a legacy run's missing product from its currently published age funnel."""
     from .funnel import published
+    from flask import current_app
 
     current = published(db, run["data"]["child_age"])
+    provider = rub_provider(current_app)
     product_id = run["data"]["snapshot"].get("consultation_product_id")
     if not product_id:
         product_id = current["data"].get("consultation_product_id") if current else None
@@ -30,11 +32,12 @@ def consultation_product(db, run):
         and data["amount"] > 0,
         "Выберите опубликованный рублёвый тариф консультации для возраста ребёнка",
     )
+    require(data.get("web_sales_approved") is True, "Веб-продажи консультации не утверждены")
+    if provider == "tbank":
+        return product
     require(
-        data.get("web_sales_approved") is True
-        and isinstance(data.get("lava_offer_id"), str)
-        and bool(data["lava_offer_id"].strip()),
-        "Для консультации настройте отдельный offer ID Lava.top и разрешение продаж",
+        isinstance(data.get("lava_offer_id"), str) and bool(data["lava_offer_id"].strip()),
+        "Для консультации настройте отдельный offer ID Lava.top",
     )
     guide_ids = {run["data"]["snapshot"].get("guide_product_id")}
     if current:
@@ -62,7 +65,7 @@ def register_consultation_commerce(app):
         require(payable_booking(booking), "Сначала подтвердите время консультации")
         run = object_get(g.db, booking["data"].get("run_id"), "funnel_run", g.actor["id"])
         require(run["status"] == "completed", "Скрининг не завершён")
-        require(provider_enabled(app, "lava"), "Этот способ оплаты отключён")
+        require(provider_enabled(app, rub_provider(app)), "Этот способ оплаты отключён")
         operations = policies(g.db, "operations")
         require(
             not operations or not operations["data"].get("pause_sales"),
@@ -149,7 +152,7 @@ def register_consultation_commerce(app):
             ],
             "total": total,
             "currency": "RUB",
-            "provider": "lava",
+            "provider": rub_provider(app),
             "surface": "telegram",
             "expires": g.now + rules["quote_ttl_seconds"],
         }

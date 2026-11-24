@@ -415,7 +415,9 @@ class Bot:
             "Трипваер",
             "Lava API: " + yes(data["integrations"]["lava_api"]),
             "Lava webhook: " + yes(data["integrations"]["lava_webhook"]),
-            "Оплата только через Lava.top: " + yes(data["integrations"]["lava_checkout_enabled"]),
+            "Основной рублёвый провайдер: " + data["integrations"]["rub_primary"],
+            "Т-Банк API: " + yes(data["integrations"]["tbank_api"]),
+            "Lava checkout: " + yes(data["integrations"]["lava_checkout_enabled"]),
             "Оферта: " + (data["offer"]["title"] if data.get("offer") else "не опубликована"),
             "Правила покупки: "
             + (data["policy"]["title"] if data.get("policy") else "не опубликованы"),
@@ -1612,10 +1614,17 @@ class Bot:
             if order["status"] == "paid":
                 self.send("Доступ открыт.", MENU)
                 return
-            self.state_set(step="funnel_checkout_email", funnel_order_id=order["id"])
-            self.send(
-                "Укажите email для электронного чека Lava.top. Он используется только для оформления платежа."
-            )
+            if order["data"]["provider"] == "lava" or (
+                order["data"]["provider"] == "tbank"
+                and self.app.config.get("TBANK_RECEIPT_TAXATION")
+            ):
+                self.state_set(step="funnel_checkout_email", funnel_order_id=order["id"])
+                self.send("Укажите email для электронного чека выбранного банка.")
+            else:
+                from .funnel_bot import show_checkout
+
+                attempt = self.api("/orders/" + order["id"] + "/checkout", "POST", {})
+                show_checkout(self, attempt)
         elif action == "booking_preparation":
             pdf = self.client.get("/api/bookings/" + d["id"] + "/preparation")
             require(pdf.status_code == 200, (pdf.json or {}).get("error", "Памятка недоступна"))

@@ -1,5 +1,6 @@
 """External boundaries. Credentials and upstream bodies are never logged."""
 
+import hashlib
 import hmac
 import json
 import os
@@ -9,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from flask import g, request
+from flask import Response, g, request
 from . import Problem, body, object_get, protected, reason, require
 from .commerce import checkout_open, confirm, provider_enabled
 from .db import audit, emit, insert, transaction, unpack, update
@@ -70,6 +71,10 @@ def invoice(app, attempt):
     """Called only after the durable attempt has committed. Never auto-retry Lava POST."""
     d = attempt["data"]
     require(provider_enabled(app, d.get("provider")), "Этот способ оплаты отключён")
+    if d["provider"] == "tbank":
+        from .tbank import init_invoice
+
+        return init_invoice(app, attempt)
     if d["provider"] == "stars":
         link = telegram(
             app,
@@ -171,9 +176,14 @@ def register_providers(app):
             from .neurocoins import require_external_checkout
 
             require(
-                app.config.get("NEUROCOINS_LAVA_ENABLED") is True
+                app.config.get(
+                    "NEUROCOINS_TBANK_ENABLED"
+                    if o["data"].get("provider") == "tbank"
+                    else "NEUROCOINS_LAVA_ENABLED"
+                )
+                is True
                 and o["data"].get("surface") == "external_web",
-                "Нейро-коины через Lava.top не продаются внутри Telegram",
+                "Нейро-коины через внешние платежи не продаются внутри Telegram",
                 403,
             )
             require_external_checkout(app)
@@ -210,7 +220,22 @@ def register_providers(app):
             "terms": product["terms"],
             "return_path": ("/wallet" if product.get("service") == "neurocoins" else "/"),
         }
-        if d["provider"] == "lava":
+        if d["provider"] == "tbank":
+            require(
+                app.config.get("TBANK_TERMINAL_KEY")
+                and app.config.get("TBANK_PASSWORD")
+                and str(app.config.get("PUBLIC_URL", "")).startswith("https://"),
+                "Настройте терминал Т-Банка и публичный HTTPS адрес",
+                503,
+            )
+            if app.config.get("TBANK_RECEIPT_TAXATION"):
+                email = request_data.get("email", "")
+                require(
+                    isinstance(email, str) and "@" in email and len(email) <= 64,
+                    "Укажите email для онлайн-чека",
+                )
+                payload["email"] = email
+        elif d["provider"] == "lava":
             require(
                 app.config.get("LAVA_API_KEY") and app.config.get("LAVA_WEBHOOK_SECRET"),
                 "Настройте Lava.top и webhook",
@@ -226,7 +251,7 @@ def register_providers(app):
                 "Укажите email для чека",
             )
             payload.update(email=email, offer_id=product["lava_offer_id"])
-        else:
+        elif d["provider"] == "stars":
             require(
                 app.config["BOT_TOKEN"] and app.config["TELEGRAM_WEBHOOK_SECRET"],
                 "Настройте Telegram и webhook",
@@ -245,13 +270,19 @@ def register_providers(app):
         require(d.get("revision") == attempt["revision"], "Попытка изменена", 409)
         if action == "reconcile":
             require(
-                attempt["data"]["provider"] == "lava",
+                attempt["data"]["provider"] in ("lava", "tbank"),
                 "Для Stars используйте журнал подтверждённых событий",
             )
-            result = check_lava(app, g.db, attempt, g.now)
+            if attempt["data"]["provider"] == "tbank":
+                from .tbank import check_state
+
+                result = check_state(app, g.db, attempt, g.now)
+            else:
+                result = check_lava(app, g.db, attempt, g.now)
         elif action == "attach-invoice":
             require(
-                attempt["data"]["provider"] == "lava" and attempt["status"] == "uncertain",
+                attempt["data"]["provider"] in ("lava", "tbank")
+                and attempt["status"] == "uncertain",
                 "Сопоставление недоступно",
             )
             provider_id = d.get("provider_id")
@@ -279,6 +310,72 @@ def register_providers(app):
             attempt["revision"],
         )
         return result
+
+    @app.post("/api/webhooks/tbank")
+    def tbank_webhook():
+        from .tbank import verify_notification
+        from .commerce import process_payment_event, record_payment_event
+
+        require(
+            app.config.get("TBANK_TERMINAL_KEY") and app.config.get("TBANK_PASSWORD"),
+            "Т-Банк не настроен",
+            503,
+        )
+        data = body()
+        require(verify_notification(app, data), "Неверная подпись Т-Банка", 401)
+        payment_id = str(data.get("PaymentId", ""))
+        attempt_id = data.get("OrderId")
+        require(
+            payment_id.isdigit()
+            and 1 <= len(payment_id) <= 20
+            and isinstance(attempt_id, str)
+            and 1 <= len(attempt_id) <= 50,
+            "Неверные идентификаторы платежа",
+        )
+        status = data.get("Status")
+        if status == "CONFIRMED" and data.get("Success") is True:
+            event = record_payment_event(
+                app,
+                "tbank",
+                payment_id,
+                {"provider_id": payment_id, "attempt_id": attempt_id},
+                g.now,
+            )
+            try:
+                process_payment_event(app, event["id"], g.now)
+            except Exception:
+                # The event was committed before processing; outbox safely retries.
+                pass
+        elif status in ("REFUNDED", "PARTIAL_REFUNDED", "REVERSED", "CHARGEBACK"):
+            # Do not automatically revoke access: preserve verified adjustment for review.
+            from .screening import idempotent
+
+            # Multiple partial refunds can share a PaymentId and Status.
+            # Deduplicate the exact signed notification rather than losing later changes.
+            payload = {key: value for key, value in data.items() if key != "Token"}
+            event_digest = hashlib.sha256(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+            ).hexdigest()
+            with transaction(app.config["DATABASE"]) as db:
+                idempotent(
+                    db,
+                    "tbank-adjustment",
+                    event_digest,
+                    {"status": status, "payment_id": payment_id, "attempt_id": attempt_id},
+                    lambda: insert(
+                        db,
+                        "reconciliation",
+                        {
+                            "issue": "tbank_" + str(status).lower(),
+                            "payment_id": payment_id,
+                            "attempt_id": attempt_id,
+                            "amount": data.get("Amount"),
+                        },
+                        g.now,
+                        status="open",
+                    ),
+                )
+        return Response("OK", mimetype="text/plain")
 
     @app.post("/api/webhooks/lava")
     def lava_webhook():

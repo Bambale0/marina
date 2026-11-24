@@ -142,6 +142,14 @@ def create_app(config=None):
         REDIS_URL=os.getenv("REDIS_URL", ""),
         PUBLIC_URL=os.getenv("PUBLIC_URL", ""),
         TELEGRAM_WEBHOOK_SECRET=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
+        PRIMARY_RUB_PROVIDER=os.getenv("PRIMARY_RUB_PROVIDER", "lava"),
+        TBANK_TERMINAL_KEY=os.getenv("TBANK_TERMINAL_KEY", ""),
+        TBANK_PASSWORD=os.getenv("TBANK_PASSWORD", ""),
+        TBANK_API_URL=os.getenv("TBANK_API_URL", "https://securepay.tinkoff.ru"),
+        TBANK_RECEIPT_TAXATION=os.getenv("TBANK_RECEIPT_TAXATION", ""),
+        TBANK_RECEIPT_TAX=os.getenv("TBANK_RECEIPT_TAX", ""),
+        TBANK_RECEIPT_PAYMENT_OBJECT=os.getenv("TBANK_RECEIPT_PAYMENT_OBJECT", ""),
+        NEUROCOINS_TBANK_ENABLED=os.getenv("NEUROCOINS_TBANK_ENABLED") == "1",
         ENABLED_PAYMENT_PROVIDERS=[
             value.strip().lower()
             for value in os.getenv("ENABLED_PAYMENT_PROVIDERS", "lava").split(",")
