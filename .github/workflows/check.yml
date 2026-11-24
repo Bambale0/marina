@@ -1,7 +1,7 @@
 name: Checks
 on:
   push:
-    branches: [develop, 'feature/**', 'fix/**']
+    branches: [main, develop, 'feature/**', 'fix/**']
   pull_request:
     branches: [develop, main]
 permissions:
