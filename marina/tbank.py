@@ -7,8 +7,11 @@ https://developer.tbank.ru/eacq/intro/developer/token
 import hashlib
 import hmac
 import logging
+import json
+import ssl
 import re
 import time
+from http.client import HTTPSConnection, HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
@@ -69,6 +72,51 @@ def error_code(result):
     return code if re.fullmatch(r"-?[0-9]{1,6}", code) else None
 
 
+def _post_json(app, base, path, data, timeout):
+    """Retry only connection setup, before any HTTP request bytes are sent."""
+    context = ssl.create_default_context()
+    deadline = time.monotonic() + timeout
+    host = urlsplit(base).hostname
+    for attempt in range(3):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        conn = HTTPSConnection(host, timeout=min(4, remaining), context=context)
+        try:
+            conn.connect()
+        except ssl.SSLError:
+            conn.close()
+            raise
+        except OSError:
+            conn.close()
+            if attempt == 2:
+                raise
+            continue
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError()
+            conn.sock.settimeout(remaining)
+            conn.request(
+                "POST",
+                "/v2/" + path,
+                body=json.dumps(data).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            response = conn.getresponse()
+            if response.status != 200:
+                raise HTTPError(
+                    base + "/v2/" + path, response.status, "Bank HTTP error", None, None
+                )
+            raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("Bank response too large")
+            return json.loads(raw)
+        finally:
+            conn.close()
+    raise TimeoutError()
+
+
 def _api(app, path, payload):
     from .providers import remote
 
@@ -90,8 +138,11 @@ def _api(app, path, payload):
     started = time.monotonic()
     logger = logging.getLogger(__name__)
     try:
-        result = remote(app, "POST", base + "/v2/" + path, data, timeout=timeout)
-    except (Problem, URLError, TimeoutError, ValueError) as exc:
+        if app.config.get("HTTP_TRANSPORT"):
+            result = remote(app, "POST", base + "/v2/" + path, data, timeout=timeout)
+        else:
+            result = _post_json(app, base, path, data, timeout)
+    except (Problem, URLError, OSError, HTTPException, ValueError) as exc:
         cause = exc.__cause__ or exc
         reason = getattr(cause, "reason", None)
         category = type(reason if isinstance(reason, BaseException) else cause).__name__

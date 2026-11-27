@@ -471,3 +471,51 @@ def test_tbank_recovery_preserves_known_payment_id(app):
     with pytest.raises(TbankFailure) as error:
         recover_invoice(app, attempt)
     assert not error.value.retryable
+
+
+@pytest.mark.parametrize("fail_after_send", [False, True])
+def test_tbank_transport_retries_only_before_sending(app, monkeypatch, fail_after_send):
+    import json
+    from types import SimpleNamespace
+    from marina.tbank import _post_json
+    import marina.tbank as tbank
+
+    calls = []
+
+    class Connection:
+        def __init__(self, host, timeout, context):
+            assert host == "securepay.tinkoff.ru"
+            assert timeout > 0
+            self.sock = SimpleNamespace(settimeout=lambda timeout: None)
+
+        def connect(self):
+            calls.append("connect")
+            if calls.count("connect") == 1:
+                raise TimeoutError()
+
+        def request(self, method, path, body, headers):
+            calls.append("request")
+            assert method == "POST"
+            assert path == "/v2/Init"
+            assert json.loads(body)["OrderId"] == "fixture-order"
+
+        def getresponse(self):
+            calls.append("response")
+            if fail_after_send:
+                raise TimeoutError()
+            return SimpleNamespace(status=200, read=lambda n: b'{"Success":true}')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(tbank, "HTTPSConnection", Connection)
+    if fail_after_send:
+        with pytest.raises(TimeoutError):
+            _post_json(
+                app, "https://securepay.tinkoff.ru", "Init", {"OrderId": "fixture-order"}, 15
+            )
+    else:
+        assert _post_json(
+            app, "https://securepay.tinkoff.ru", "Init", {"OrderId": "fixture-order"}, 15
+        ) == {"Success": True}
+    assert calls == ["connect", "connect", "request", "response"]
