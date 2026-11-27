@@ -1,15 +1,20 @@
 """T-Bank internet acquiring (eacq /v2), with signed notifications and GET-state reconciliation.
 
-No automatic retry of payment creation. Only a verified CONFIRMED payment grants rights.
+Retry creation only after authenticated CheckOrder returns order-not-found. Only a verified CONFIRMED payment grants rights.
 https://developer.tbank.ru/eacq/intro/developer/token
 """
 
 import hashlib
 import hmac
+import logging
+import re
+import time
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
-from . import object_get, require
-from .commerce import confirm
+from . import Problem, object_get, require
+from .commerce import checkout_open, confirm, provider_enabled
+from .db import connect
 
 
 def _scalar(value):
@@ -49,6 +54,21 @@ def verify_notification(app, data):
     )
 
 
+class TbankFailure(Problem):
+    """Sanitized failure category; never include bank bodies or credential values."""
+
+    def __init__(self, category, *, code=None, retryable=True):
+        super().__init__("Счёт Т-Банка требует сверки", 503)
+        self.category = category
+        self.code = code
+        self.retryable = retryable
+
+
+def error_code(result):
+    code = str(result.get("ErrorCode", "")) if isinstance(result, dict) else ""
+    return code if re.fullmatch(r"-?[0-9]{1,6}", code) else None
+
+
 def _api(app, path, payload):
     from .providers import remote
 
@@ -64,7 +84,39 @@ def _api(app, path, payload):
     )
     data = {"TerminalKey": terminal, **payload}
     data["Token"] = sign(data, password)
-    return remote(app, "POST", base + "/v2/" + path, data)
+    timeout = max(1, min(20, int(app.config.get("TBANK_HTTP_TIMEOUT", 15))))
+    order_id = payload.get("OrderId", "")
+    correlation = order_id if re.fullmatch(r"[a-zA-Z0-9_-]{1,50}", str(order_id)) else "-"
+    started = time.monotonic()
+    logger = logging.getLogger(__name__)
+    try:
+        result = remote(app, "POST", base + "/v2/" + path, data, timeout=timeout)
+    except (Problem, URLError, TimeoutError, ValueError) as exc:
+        cause = exc.__cause__ or exc
+        reason = getattr(cause, "reason", None)
+        category = type(reason if isinstance(reason, BaseException) else cause).__name__
+        status = cause.code if isinstance(cause, HTTPError) else None
+        logger.warning(
+            "tbank operation=%s order_id=%s elapsed_ms=%d failure=%s http_status=%s",
+            path,
+            correlation,
+            int((time.monotonic() - started) * 1000),
+            category,
+            status,
+        )
+        raise TbankFailure("transport") from None
+    code = error_code(result)
+    success = isinstance(result, dict) and result.get("Success") is True
+    logger.log(
+        logging.INFO if success else logging.WARNING,
+        "tbank operation=%s order_id=%s elapsed_ms=%d success=%s error_code=%s",
+        path,
+        correlation,
+        int((time.monotonic() - started) * 1000),
+        success,
+        code,
+    )
+    return result
 
 
 def _receipt(app, attempt):
@@ -138,7 +190,7 @@ def init_invoice(app, attempt):
     if receipt:
         payload["Receipt"] = receipt
     result = _api(app, "Init", payload)
-    require(
+    if not (
         isinstance(result, dict)
         and result.get("Success") is True
         and isinstance(result.get("PaymentId"), (str, int))
@@ -146,11 +198,39 @@ def init_invoice(app, attempt):
         and len(str(result["PaymentId"])) <= 20
         and isinstance(result.get("PaymentURL"), str)
         and urlsplit(result["PaymentURL"]).scheme == "https"
-        and bool(urlsplit(result["PaymentURL"]).netloc),
-        "Ответ Т-Банка неопределён; счёт требует сверки",
-        503,
-    )
+        and bool(urlsplit(result["PaymentURL"]).netloc)
+    ):
+        raise TbankFailure("init_response", code=error_code(result))
     return {"url": result["PaymentURL"], "provider_id": str(result["PaymentId"])}
+
+
+def recover_invoice(app, attempt):
+    """Never infer absence from a timeout, an empty successful list or a generic error."""
+    if attempt["data"].get("provider_id"):
+        raise TbankFailure("existing_payment_id", retryable=False)
+    result = _api(app, "CheckOrder", {"OrderId": attempt["id"]})
+    if (
+        isinstance(result, dict)
+        and result.get("Success") is False
+        and error_code(result) == "335"
+        and not result.get("Payments")
+    ):
+        with connect(app.config["DATABASE"]) as db:
+            order = object_get(db, attempt["data"]["order_id"], "order", attempt["owner"])
+            if not provider_enabled(app, "tbank") or not checkout_open(
+                db, order, int(app.config["CLOCK"]())
+            ):
+                raise TbankFailure("checkout_closed", retryable=False)
+            if order["data"].get("product_snapshot", {}).get("service") == "neurocoins" and (
+                app.config.get("NEUROCOINS_TBANK_ENABLED") is not True
+                or order["data"].get("surface") != "external_web"
+            ):
+                raise TbankFailure("checkout_closed", retryable=False)
+        return init_invoice(app, attempt)
+    if isinstance(result, dict) and result.get("Success") is True:
+        # CheckOrder does not guarantee a reusable PaymentURL. Do not construct one.
+        raise TbankFailure("existing_order", code=error_code(result), retryable=False)
+    raise TbankFailure("check_order", code=error_code(result))
 
 
 def check_state(app, db, attempt, now, payment_id=None):

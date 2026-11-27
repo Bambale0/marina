@@ -271,6 +271,25 @@ def notify(app, owner, object_id, event):
         ).fetchone()
     if event in ("consultation.paid", "consultation.cancelled"):
         return notify_consultation(app, owner, object_id, event)
+    if event == "invoice.failed":
+        with connect(app.config["DATABASE"]) as db:
+            attempt = object_get(db, object_id, "payment_attempt", owner)
+            order = object_get(db, attempt["data"]["order_id"], "order", owner)
+            if (
+                attempt["status"] != "uncertain"
+                or order["status"] != "pending"
+                or order["data"].get("product_snapshot", {}).get("service") == "neurocoins"
+            ):
+                return
+        require(account, "Получатель не найден")
+        return telegram(
+            app,
+            "sendMessage",
+            {
+                "chat_id": account["telegram_id"],
+                "text": "Не удалось получить ссылку на оплату. Счёт требует проверки. Не повторяйте оплату; обратитесь в /paysupport.",
+            },
+        )
     if event == "invoice.ready":
         from .commerce import checkout_open, provider_enabled
 
@@ -386,12 +405,22 @@ def work_once(app, send=None):
             "invoice.create",
             "refund.create",
         )
-        if event["event"] == "invoice.create" and event["status"] == "pending":
+        if event["event"] == "invoice.create":
             from .commerce import checkout_open, provider_enabled
 
             attempt = object_get(db, event["object_id"], "payment_attempt")
             order = object_get(db, attempt["data"]["order_id"], "order")
-            if attempt["status"] == "queued" and (
+            if attempt["status"] not in ("queued", "uncertain"):
+                db.execute(
+                    "UPDATE outbox SET status='cancelled',leased_until=NULL WHERE id=?",
+                    (event["id"],),
+                )
+                return 1
+            if (
+                not uncertain
+                and attempt["status"] == "queued"
+                or attempt["data"]["provider"] == "tbank"
+            ) and (
                 not checkout_open(db, order, now)
                 or not provider_enabled(app, attempt["data"]["provider"])
                 or (
@@ -407,7 +436,27 @@ def work_once(app, send=None):
                     )
                 )
             ):
-                update(db, attempt, now, status="cancelled")
+                if attempt["status"] == "queued" and not uncertain:
+                    update(db, attempt, now, status="cancelled")
+                else:
+                    update(db, attempt, now, status="uncertain")
+                    if not db.execute(
+                        "SELECT 1 FROM objects WHERE kind='reconciliation' AND status='open' "
+                        "AND json_extract(data,'$.attempt_id')=?",
+                        (attempt["id"],),
+                    ).fetchone():
+                        insert(
+                            db,
+                            "reconciliation",
+                            {
+                                "issue": "invoice_creation_uncertain",
+                                "attempt_id": attempt["id"],
+                                "failure_category": "checkout_closed",
+                            },
+                            now,
+                            attempt["owner"],
+                            status="open",
+                        )
                 db.execute(
                     "UPDATE outbox SET status='cancelled',leased_until=NULL WHERE id=?",
                     (event["id"],),
@@ -418,14 +467,22 @@ def work_once(app, send=None):
             (now + 60, event["id"]),
         )
     outcome, result, awaiting_payment = "sent", None, False
+    invoice_failure = None
     try:
         if event["event"] == "invoice.create":
             from .providers import invoice
 
-            require(not uncertain, "Нужна сверка незавершённой попытки")
             with connect(path) as db:
                 attempt = object_get(db, event["object_id"], "payment_attempt")
-            result = invoice(app, attempt)
+            if attempt["data"]["provider"] == "tbank" and (
+                uncertain or attempt["status"] == "uncertain"
+            ):
+                from .tbank import recover_invoice
+
+                result = recover_invoice(app, attempt)
+            else:
+                require(not uncertain, "Нужна сверка незавершённой попытки")
+                result = invoice(app, attempt)
         elif event["event"] == "refund.create":
             from .refunds import refund_external
 
@@ -450,8 +507,12 @@ def work_once(app, send=None):
             result = generate(app, job)
         else:
             (send or notify)(app, event["owner"], event["object_id"], event["event"])
-    except Exception:
+    except Exception as exc:
         # No upstream exception text: it can contain credentials or client content.
+        from .tbank import TbankFailure
+
+        if isinstance(exc, TbankFailure):
+            invoice_failure = exc
         outcome = "failed"
     with transaction(path) as db:
         current = db.execute("SELECT * FROM outbox WHERE id=?", (event["id"],)).fetchone()
@@ -484,17 +545,34 @@ def work_once(app, send=None):
                     emit(db, attempt["owner"], attempt["id"], "invoice.ready", now)
             state = "sent" if outcome == "sent" else "failed"
             if outcome == "failed":
-                insert(
-                    db,
-                    "reconciliation",
-                    {
+                if (
+                    attempt["data"]["provider"] == "tbank"
+                    and invoice_failure is not None
+                    and invoice_failure.retryable
+                    and current["attempts"] < 3
+                ):
+                    # Retain this durable attempt ID. The next lease must CheckOrder first.
+                    state = "pending"
+                else:
+                    details = {
                         "issue": "invoice_creation_uncertain",
                         "attempt_id": attempt["id"],
-                    },
-                    now,
-                    attempt["owner"],
-                    status="open",
-                )
+                    }
+                    if invoice_failure is not None:
+                        details.update(
+                            failure_category=invoice_failure.category,
+                            bank_error_code=invoice_failure.code,
+                        )
+                    if not db.execute(
+                        "SELECT 1 FROM objects WHERE kind='reconciliation' AND status='open' "
+                        "AND json_extract(data,'$.attempt_id')=?",
+                        (attempt["id"],),
+                    ).fetchone():
+                        insert(db, "reconciliation", details, now, attempt["owner"], status="open")
+                    if attempt["data"]["provider"] == "tbank":
+                        from .funnel import schedule
+
+                        schedule(db, attempt, "invoice.failed", now)
         elif event["event"] == "refund.create":
             refund = object_get(db, event["object_id"], "refund")
             state = (
