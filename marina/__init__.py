@@ -148,6 +148,7 @@ def create_app(config=None):
         TBANK_TERMINAL_KEY=os.getenv("TBANK_TERMINAL_KEY", ""),
         TBANK_PASSWORD=os.getenv("TBANK_PASSWORD", ""),
         TBANK_API_URL=os.getenv("TBANK_API_URL", "https://securepay.tinkoff.ru"),
+        TBANK_HTTP_TIMEOUT=int(os.getenv("TBANK_HTTP_TIMEOUT", "15")),
         TBANK_RECEIPT_TAXATION=os.getenv("TBANK_RECEIPT_TAXATION", ""),
         TBANK_RECEIPT_TAX=os.getenv("TBANK_RECEIPT_TAX", ""),
         TBANK_RECEIPT_PAYMENT_OBJECT=os.getenv("TBANK_RECEIPT_PAYMENT_OBJECT", ""),

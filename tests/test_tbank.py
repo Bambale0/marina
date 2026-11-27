@@ -329,3 +329,193 @@ def test_payment_return_links_to_configured_bot(app):
     assert client.get("/bot").status_code == 503
     app.config["BOT_USERNAME"] = "https://example.test"
     assert client.get("/bot").status_code == 503
+
+
+def queue_invoice(app):
+    from marina.db import emit, update
+
+    settings(app)
+    order, attempt = order_and_attempt(app)
+    with transaction(app.config["DATABASE"]) as db:
+        data = dict(attempt["data"])
+        data.pop("provider_id")
+        attempt = update(db, attempt, app.clock[0], data, "queued")
+        emit(db, attempt["owner"], attempt["id"], "invoice.create", app.clock[0])
+    return order, attempt
+
+
+def test_tbank_worker_recovers_after_missing_order(app):
+    from marina.operations import work_once
+
+    order, attempt = queue_invoice(app)
+    calls = []
+
+    def fake(method, url, data, headers):
+        operation = url.rsplit("/", 1)[-1]
+        calls.append(operation)
+        assert data["OrderId"] == attempt["id"]
+        if calls == ["Init"]:
+            raise TimeoutError("private upstream body")
+        if operation == "CheckOrder":
+            return {"Success": False, "ErrorCode": "335"}
+        return {
+            "Success": True,
+            "PaymentId": "12345",
+            "PaymentURL": "https://securepay.tinkoff.ru/fixture",
+        }
+
+    app.config["HTTP_TRANSPORT"] = fake
+    assert work_once(app) == 1
+    assert calls == ["Init"]
+    app.clock[0] += 60
+    assert work_once(app) == 1
+    assert calls == ["Init", "CheckOrder", "Init"]
+    with connect(app.config["DATABASE"]) as db:
+        from marina import object_get
+
+        saved = object_get(db, attempt["id"])
+        assert saved["status"] == "ready"
+        assert saved["data"]["provider_id"] == "12345"
+        assert db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        {"Success": True, "Payments": [{"PaymentId": "12345", "Status": "NEW"}]},
+        {"Success": False, "ErrorCode": "9999"},
+        {"Success": False, "ErrorCode": "335", "Payments": [{"PaymentId": "12345"}]},
+    ],
+)
+def test_tbank_worker_never_recreates_unverified_order(app, lookup):
+    from marina.operations import work_once
+
+    _, attempt = queue_invoice(app)
+    calls = []
+
+    def fake(method, url, data, headers):
+        operation = url.rsplit("/", 1)[-1]
+        calls.append(operation)
+        if operation == "Init":
+            raise TimeoutError()
+        return lookup
+
+    app.config["HTTP_TRANSPORT"] = fake
+    assert work_once(app) == 1
+    for _ in range(4):
+        app.clock[0] += 120
+        work_once(app, send=lambda *args: None)
+    assert calls.count("Init") == 1
+    assert calls.count("CheckOrder") >= 1
+    with connect(app.config["DATABASE"]) as db:
+        from marina import object_get
+
+        assert object_get(db, attempt["id"])["status"] == "uncertain"
+        assert db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0] == 0
+
+
+def test_tbank_expired_recovery_never_creates_invoice(app):
+    from marina.operations import work_once
+    from marina.db import update
+    from marina import object_get
+
+    order, attempt = queue_invoice(app)
+    calls = []
+
+    def fake(method, url, data, headers):
+        calls.append(url.rsplit("/", 1)[-1])
+        if calls == ["Init"]:
+            raise TimeoutError()
+        assert calls == ["Init", "CheckOrder"]
+        with transaction(app.config["DATABASE"]) as db:
+            current = object_get(db, order["id"])
+            update(db, current, app.clock[0], {**current["data"], "expires": app.clock[0]})
+        return {"Success": False, "ErrorCode": "335"}
+
+    app.config["HTTP_TRANSPORT"] = fake
+    work_once(app)
+    app.clock[0] += 60
+    work_once(app)
+    assert calls == ["Init", "CheckOrder"]
+    with connect(app.config["DATABASE"]) as db:
+        assert object_get(db, attempt["id"])["status"] == "uncertain"
+
+
+def test_tbank_recovery_logs_safe_metadata_not_upstream_body(app, caplog):
+    from marina.operations import work_once
+
+    _, attempt = queue_invoice(app)
+
+    def fake(*args):
+        raise TimeoutError("do-not-log-this-secret")
+
+    app.config["HTTP_TRANSPORT"] = fake
+    work_once(app)
+    assert "tbank operation=Init" in caplog.text
+    assert attempt["id"] in caplog.text
+    assert "TimeoutError" in caplog.text
+    assert "do-not-log-this-secret" not in caplog.text
+    assert "fixture-password" not in caplog.text
+
+
+def test_tbank_recovery_preserves_known_payment_id(app):
+    from marina.tbank import recover_invoice, TbankFailure
+
+    settings(app)
+    _, attempt = order_and_attempt(app)
+
+    def unexpected(*args):
+        pytest.fail("A known payment must not be recreated")
+
+    app.config["HTTP_TRANSPORT"] = unexpected
+    with pytest.raises(TbankFailure) as error:
+        recover_invoice(app, attempt)
+    assert not error.value.retryable
+
+
+@pytest.mark.parametrize("fail_after_send", [False, True])
+def test_tbank_transport_retries_only_before_sending(app, monkeypatch, fail_after_send):
+    import json
+    from types import SimpleNamespace
+    from marina.tbank import _post_json
+    import marina.tbank as tbank
+
+    calls = []
+
+    class Connection:
+        def __init__(self, host, timeout, context):
+            assert host == "securepay.tinkoff.ru"
+            assert timeout > 0
+            self.sock = SimpleNamespace(settimeout=lambda timeout: None)
+
+        def connect(self):
+            calls.append("connect")
+            if calls.count("connect") == 1:
+                raise TimeoutError()
+
+        def request(self, method, path, body, headers):
+            calls.append("request")
+            assert method == "POST"
+            assert path == "/v2/Init"
+            assert json.loads(body)["OrderId"] == "fixture-order"
+
+        def getresponse(self):
+            calls.append("response")
+            if fail_after_send:
+                raise TimeoutError()
+            return SimpleNamespace(status=200, read=lambda n: b'{"Success":true}')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(tbank, "HTTPSConnection", Connection)
+    if fail_after_send:
+        with pytest.raises(TimeoutError):
+            _post_json(
+                app, "https://securepay.tinkoff.ru", "Init", {"OrderId": "fixture-order"}, 15
+            )
+    else:
+        assert _post_json(
+            app, "https://securepay.tinkoff.ru", "Init", {"OrderId": "fixture-order"}, 15
+        ) == {"Success": True}
+    assert calls == ["connect", "connect", "request", "response"]
